@@ -1,0 +1,48 @@
+name: Nightly Bug Bounty Scan
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Run at midnight every day automatically
+  workflow_dispatch: # Allow manual triggering from the GitHub Actions tab
+
+jobs:
+  recon-and-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install System Dependencies (Go, Git, Curl)
+        run: sudo apt-get update && sudo apt-get install -y golang git wget curl
+
+      - name: Install Python Dependencies
+        run: pip install requests urllib3
+
+      - name: Execute Cross-Platform Setup (Downloads Nuclei, FFUF, Subfinder, GAU)
+        run: python setup_tools.py
+
+      - name: Run Autopilot Engine
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SHODAN_API_KEY: ${{ secrets.SHODAN_API_KEY }}
+          HACKERONE_USERNAME: ${{ secrets.HACKERONE_USERNAME }}
+          HACKERONE_API_TOKEN: ${{ secrets.HACKERONE_API_TOKEN }}
+        run: python autopilot.py
+
+      - name: Generate HTML Dashboard Report
+        run: python generate_report.py
+
+      - name: Upload Vulnerability Reports as Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: bug-bounty-results
+          path: |
+            data/autopilot/latest_fast_scan.json
+            data/autopilot/dashboard.html
+            reports/

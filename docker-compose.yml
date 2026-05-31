@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  autopilot:
+    build: .
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      - neo4j
+
+  neo4j:
+    image: neo4j:latest
+    environment:
+      - NEO4J_AUTH=neo4j/password123
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - ./data/neo4j:/data
+
+  config-ui:
+    build: .
+    command: ["python", "config_app.py"]
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./:/app
+
+
+  bot:
+    build: .
+    command: ["python", "c2_bot.py"]
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      - autopilot
