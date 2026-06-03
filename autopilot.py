@@ -228,7 +228,7 @@ def load_targets():
                 if atype in ("APPLE_STORE_APP_ID", "GOOGLE_PLAY_APP_ID", "HARDWARE", "WINDOWS_APP", "OTHER_APK", "CIDR", "SOURCE_CODE", "EXECUTABLE"):
                     continue
                 asset = s.get("asset_identifier", "")
-                if asset and len(asset) > 3 and " " not in asset and not asset.isdigit() and not asset.startswith("*"):
+                if asset and len(asset) > 3 and " " not in asset and not asset.isdigit() and "*" not in asset:
                     clean = asset.strip().rstrip("/")
                     if not clean.startswith("http"): clean = f"https://{clean}"
                     urls.add(clean)
@@ -469,8 +469,15 @@ def check_takeover(url):
                 break
         if dns_status != 0:  # NXDOMAIN
             if cname_target:  # Dangling CNAME = real takeover candidate
-                return {"type": "SUBDOMAIN_TAKEOVER", "url": url, "severity": "HIGH", "confidence": "HIGH",
-                        "detail": f"NXDOMAIN + dangling CNAME → {cname_target}"}
+                # Verify CNAME target is actually resolvable to a takeover service
+                # We will only flag HIGH if the CNAME contains known provider strings (aws, heroku, github, etc)
+                known_providers = ["s3", "amazonaws", "herokuapp", "github.io", "wpengine", "surge.sh", "azure", "trafficmanager", "cloudflare", "fastly"]
+                if any(p in cname_target.lower() for p in known_providers):
+                    return {"type": "SUBDOMAIN_TAKEOVER", "url": url, "severity": "HIGH", "confidence": "HIGH",
+                            "detail": f"NXDOMAIN + dangling CNAME → {cname_target}"}
+                else:
+                    return {"type": "SUBDOMAIN_TAKEOVER", "url": url, "severity": "MEDIUM", "confidence": "MEDIUM",
+                            "detail": f"NXDOMAIN + generic dangling CNAME → {cname_target}"}
             return None  # NXDOMAIN without CNAME = just unconfigured, not exploitable
         # Step 3: Even if DNS resolves, check HTTP for takeover fingerprints
         try:
@@ -536,22 +543,36 @@ def check_idor_single(target, b_len):
         if r1.status_code != 200:
             return None
         time.sleep(0.2)
-        # Consistency check: same request again
-        r2 = requests.get(target, headers=get_stealth_headers(), timeout=3, verify=False)
-        if r2.status_code != 200:
+        
+        # We need to ensure that the content is dynamically changing based on the ID, 
+        # not just returning a static dashboard or login page.
+        # Test with a random ID to see if the response is different.
+        random_target = re.sub(r'=[^&]+', f'={random.randint(90000, 99999)}', target)
+        if random_target == target: return None
+        
+        rr = requests.get(random_target, headers=get_stealth_headers(), timeout=3, verify=False)
+        
+        len1, len_r = len(r1.text), len(rr.text)
+        
+        # If the valid ID and the random ID return pages of very similar length, it's just a static template
+        if abs(len1 - len_r) < 100:
             return None
-        len1, len2 = len(r1.text), len(r2.text)
-        if abs(len1 - len2) > 200:
-            return None  # Page content varies between identical requests — dynamic page, not IDOR
-        avg_len = (len1 + len2) / 2
-        diff = abs(avg_len - b_len)
-        if diff > 1000:  # Require significant difference
+            
+        diff = abs(len1 - b_len)
+        if diff > 500:  # Require significant difference from base endpoint
             data_indicators = ['"email"', '"username"', '"user_id"', '"name"', '"address"',
                              '"phone"', '"balance"', '"account"', '"token"', '"password"']
             has_data = any(ind in r1.text.lower() for ind in data_indicators)
-            if has_data:
-                return {"type": "IDOR_CANDIDATE", "url": target, "severity": "HIGH", "confidence": "MEDIUM",
-                        "detail": f"Unique response ({int(diff)} bytes diff) with data indicators"}
+            
+            # Additional check: Content-Type should ideally be JSON for API IDORs
+            is_json = "application/json" in r1.headers.get("Content-Type", "")
+            
+            if has_data and is_json:
+                return {"type": "IDOR_CANDIDATE", "url": target, "severity": "HIGH", "confidence": "HIGH",
+                        "detail": f"JSON response differs from invalid ID ({abs(len1 - len_r)} bytes diff)"}
+            elif has_data:
+                return {"type": "IDOR_CANDIDATE", "url": target, "severity": "MEDIUM", "confidence": "MEDIUM",
+                        "detail": f"HTML response differs from invalid ID, contains data keywords"}
     except Exception: pass
 
 def get_bin(name):
@@ -782,7 +803,7 @@ def fetch_all_targets():
             for t in p.get("targets", {}).get("in_scope", []):
                 asset = t.get("asset_identifier", "")
                 atype = t.get("asset_type", "").upper()
-                if atype in ("URL", "WILDCARD") and not asset.startswith("*"):
+                if atype in ("URL", "WILDCARD") and "*" not in asset:
                     clean = asset.strip().rstrip("/")
                     if not clean.startswith("http"): clean = f"https://{clean}"
                     urls.append(clean)
@@ -801,7 +822,7 @@ def fetch_all_targets():
             urls = []
             for t in p.get("targets", {}).get("in_scope", []):
                 asset = t.get("target", "")
-                if asset and " " not in asset and "." in asset and not asset.startswith("*"):
+                if asset and " " not in asset and "." in asset and "*" not in asset:
                     clean = asset.strip().rstrip("/")
                     if not clean.startswith("http"): clean = f"https://{clean}"
                     urls.append(clean)
