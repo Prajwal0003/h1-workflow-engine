@@ -1,9 +1,9 @@
-name: Nightly Bug Bounty Scan
+name: Bug Bounty Scan
 
 on:
   schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    - cron: '0 */5 * * *' # Run every 5 hours automatically
+  workflow_dispatch: # Allow manual triggering from the GitHub Actions tab
 
 jobs:
   recon-and-scan:
@@ -16,6 +16,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Install System Dependencies (Go, Git, Curl)
+        run: sudo apt-get update && sudo apt-get install -y golang git wget curl
 
       - name: Install Python Dependencies
         run: pip install -r requirements.txt
@@ -33,18 +36,18 @@ jobs:
           INTERACTSH_URL=${{ secrets.INTERACTSH_URL }}
           EOF
 
-      - name: Download Recon Tools
+      - name: Execute Cross-Platform Setup (Downloads Nuclei, FFUF, Subfinder, GAU)
         run: python setup_tools.py
 
-      - name: Run Autopilot Engine
-        run: python autopilot.py
-        timeout-minutes: 30
+      - name: Run Autopilot Engine (Dynamic Targets)
+        run: python autopilot.py --dynamic
+        timeout-minutes: 45
 
-      - name: Generate HTML Dashboard
+      - name: Generate HTML Dashboard Report
         if: always()
         run: python generate_report.py
 
-      - name: Upload Results
+      - name: Upload Vulnerability Reports as Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:

