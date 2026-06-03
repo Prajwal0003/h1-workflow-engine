@@ -904,6 +904,12 @@ def main():
                 proof = ai_exploit_and_prove(f)
                 if proof and proof.get("verified"):
                     verified_count += 1
+            
+            # If the AI tested the exploit and it failed, drop the finding completely
+            if f.get("verified") is False:
+                log(f"[*] Dropping {f.get('type')} on {f.get('url')} because AI verification failed.")
+                continue
+
             send_discord_webhook(f)
             generate_ai_report(f)
             create_notion_ticket(f)
