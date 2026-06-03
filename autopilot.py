@@ -59,7 +59,17 @@ def send_discord_webhook(finding):
         return
     if finding.get("severity") not in ["HIGH", "CRITICAL"]:
         return
-    msg = f"🚨 **{finding.get('severity')} Vulnerability Found!** 🚨\n**Type**: {finding.get('type')}\n**URL**: {finding.get('url')}\n**Program**: {finding.get('program')}"
+    confidence = finding.get("confidence", "LOW")
+    if confidence == "LOW":
+        return  # Don't spam Discord with unverified findings
+    verified = "✅ VERIFIED" if finding.get("verified") else ""
+    conf_emoji = {"HIGH": "🟢", "MEDIUM": "🟡"}.get(confidence, "⚪")
+    msg = (f"🚨 **{finding.get('severity')} Vulnerability Found!** {verified}\n"
+           f"**Confidence**: {conf_emoji} {confidence}\n"
+           f"**Type**: {finding.get('type')}\n"
+           f"**URL**: {finding.get('url')}\n"
+           f"**Program**: {finding.get('program')}\n"
+           f"**Detail**: {finding.get('detail', 'N/A')}")
     try:
         requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=3)
     except: pass
@@ -67,19 +77,112 @@ def send_discord_webhook(finding):
 def generate_ai_report(finding):
     if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return
     if finding.get("severity") not in ["HIGH", "CRITICAL"]: return
+    if finding.get("confidence", "LOW") == "LOW": return
     
-    prompt = f"Write a professional HackerOne bug bounty report for a {finding.get('severity')} severity {finding.get('type')} vulnerability on {finding.get('url')}. Include Description, Impact, and a generic Proof of Concept."
+    proof_section = ""
+    if finding.get("proof"):
+        proof_section = f"\n\nAUTOMATED PROOF OF CONCEPT OUTPUT:\n{finding['proof']}\n\nPoC Script Path: {finding.get('poc_script', 'N/A')}"
+    
+    prompt = (f"Write a professional HackerOne bug bounty report for a {finding.get('severity')} severity "
+              f"{finding.get('type')} vulnerability on {finding.get('url')}.\n"
+              f"Detail: {finding.get('detail', 'N/A')}\n"
+              f"Confidence: {finding.get('confidence', 'N/A')}\n"
+              f"{proof_section}\n\n"
+              f"Include: Description, Steps to Reproduce, Impact, and Proof of Concept. "
+              f"If automated proof output is provided above, include it as evidence.")
     model = random.choice(MODELS)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
     payload = {"contents": [{"parts":[{"text": prompt}]}]}
     try:
-        r = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
+        r = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=15)
         report_text = r.json()['candidates'][0]['content']['parts'][0]['text']
-        safe_name = finding.get('type', 'vuln')
+        safe_name = finding.get('type', 'vuln').replace(' ', '_')[:30]
         report_path = REPORTS_DIR / f"report_{safe_name}_{int(time.time())}.md"
         report_path.write_text(report_text, encoding="utf-8")
         log(f"[+] AI generated full bug report at {report_path}")
     except Exception as e: pass
+
+def ai_exploit_and_prove(finding):
+    """AI generates a safe PoC exploit, runs it, captures proof for the report."""
+    if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return None
+    if finding.get("severity") not in ["HIGH", "CRITICAL"]: return None
+    if finding.get("confidence", "LOW") == "LOW": return None
+    
+    vuln_type = finding.get("type", "")
+    target_url = finding.get("url", "")
+    detail = finding.get("detail", "")
+    
+    prompt = (f"You are an expert penetration tester. Write a safe, read-only Python PoC script.\n"
+              f"Vulnerability: {vuln_type}\nURL: {target_url}\nDetails: {detail}\n\n"
+              f"The script MUST:\n"
+              f"1. Send HTTP request(s) that demonstrate this vulnerability\n"
+              f"2. Print evidence (headers, timing, reflected values, status codes)\n"
+              f"3. Print 'VERIFIED: VULNERABLE' or 'NOT VERIFIED' as the LAST line\n"
+              f"4. Use ONLY requests and time libraries\n"
+              f"5. Be read-only, no destructive actions, complete in under 15 seconds\n\n"
+              f"Output ONLY raw Python code. No markdown, no explanation.")
+    
+    model = random.choice(MODELS)
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+    payload = {"contents": [{"parts":[{"text": prompt}]}]}
+    
+    try:
+        r = requests.post(api_url, json=payload, headers={"Content-Type": "application/json"}, timeout=15)
+        script = r.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+        
+        # Clean markdown
+        if script.startswith("```python"): script = script[9:]
+        if script.startswith("```"): script = script[3:]
+        if script.endswith("```"): script = script[:-3]
+        script = script.strip()
+        
+        # Safety: block dangerous operations
+        dangerous = ["os.system", "subprocess", "open(", ".write(", "unlink", "rmdir",
+                     "shutil", "eval(", "exec(", "import os", "__import__", "remove("]
+        if any(d in script for d in dangerous):
+            log(f"[!] AI PoC blocked — contains unsafe operations")
+            return None
+        
+        # Save and execute
+        poc_dir = Path("reports/poc")
+        poc_dir.mkdir(parents=True, exist_ok=True)
+        safe_type = re.sub(r'[^a-zA-Z0-9_]', '_', vuln_type)[:30]
+        ts = int(time.time())
+        poc_file = poc_dir / f"poc_{safe_type}_{ts}.py"
+        poc_file.write_text(script, encoding="utf-8")
+        
+        log(f"[*] Running AI PoC for {vuln_type}...")
+        result = subprocess.run(
+            [sys.executable, str(poc_file)],
+            capture_output=True, text=True, timeout=20
+        )
+        
+        output = result.stdout.strip()
+        verified = "VERIFIED: VULNERABLE" in output
+        
+        # Save proof
+        proof = {
+            "finding_type": vuln_type, "url": target_url,
+            "poc_script": script, "poc_output": output,
+            "verified": verified, "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        proof_file = poc_dir / f"proof_{safe_type}_{ts}.json"
+        proof_file.write_text(json.dumps(proof, indent=2), encoding="utf-8")
+        
+        if verified:
+            log(f"[+] ✅ AI PoC VERIFIED: {vuln_type} at {target_url}")
+            finding["proof"] = output
+            finding["poc_script"] = str(poc_file)
+            finding["verified"] = True
+        else:
+            log(f"[-] AI PoC could not verify: {vuln_type} (likely false positive)")
+            finding["verified"] = False
+        return proof
+    except subprocess.TimeoutExpired:
+        log(f"[-] AI PoC timed out for {vuln_type}")
+    except Exception as e:
+        log(f"[-] AI PoC error: {e}")
+    return None
 
 CORS_ORIGINS = ["https://evil.com"]
 SQLI_PAYLOADS = ["' OR '1'='1", "'; WAITFOR DELAY '0:0:5'--"]
@@ -232,19 +335,63 @@ def generate_nuclei_template(finding):
         log(f"[+] AI self-learned and generated a new custom Nuclei template at {template_path}")
     except Exception as e: pass
 
+TAKEOVER_FINGERPRINTS = [
+    ("NoSuchBucket", "AWS S3"), ("There isn't a GitHub Pages site here", "GitHub Pages"),
+    ("Heroku | No such app", "Heroku"), ("404 Blog is not found", "Tumblr"),
+    ("Do you want to register", "WordPress.com"), ("project not found", "Surge.sh"),
+    ("Unrecognized domain", "Helpjuice"), ("The specified bucket does not exist", "AWS S3"),
+]
+
 def check_cors(url):
     try:
-        r = requests.get(url, headers={**get_stealth_headers(), "Origin": CORS_ORIGINS[0]}, timeout=3, verify=False)
+        h1 = {**get_stealth_headers(), "Origin": "https://evil.com"}
+        r = requests.get(url, headers=h1, timeout=3, verify=False)
         acao = r.headers.get("Access-Control-Allow-Origin", "")
-        if acao == CORS_ORIGINS[0]: return {"type": "CORS_REFLECTION", "url": url, "severity": "HIGH"}
+        acac = r.headers.get("Access-Control-Allow-Credentials", "").lower()
+        if acao != "https://evil.com":
+            return None
+        # Verify: test with a SECOND random origin to confirm true reflection
+        rand_origin = f"https://attacker-{random.randint(1000,9999)}.com"
+        h2 = {**get_stealth_headers(), "Origin": rand_origin}
+        r2 = requests.get(url, headers=h2, timeout=3, verify=False)
+        acao2 = r2.headers.get("Access-Control-Allow-Origin", "")
+        if acao2 != rand_origin:
+            return None  # Only reflects specific origin, not arbitrary — false positive
+        if acac == "true":
+            return {"type": "CORS_REFLECTION", "url": url, "severity": "HIGH", "confidence": "HIGH",
+                    "detail": "Reflects ANY Origin + allows Credentials — exploitable for data theft"}
+        else:
+            return {"type": "CORS_REFLECTION", "url": url, "severity": "LOW", "confidence": "MEDIUM",
+                    "detail": "Reflects Origin but NO credentials — limited impact"}
     except Exception: pass
 
 def check_takeover(url):
     try:
         host = urlparse(url).hostname
+        # Step 1: DNS check
         r = requests.get(f"https://1.1.1.1/dns-query?name={host}&type=A", headers={"Accept": "application/dns-json"}, timeout=3)
-        if r.json().get("Status", 3) != 0:
-            return {"type": "SUBDOMAIN_TAKEOVER", "url": url, "severity": "HIGH", "detail": "DNS NXDOMAIN"}
+        dns_status = r.json().get("Status", 0)
+        # Step 2: Check CNAME
+        rc = requests.get(f"https://1.1.1.1/dns-query?name={host}&type=CNAME", headers={"Accept": "application/dns-json"}, timeout=3)
+        cname_data = rc.json()
+        cname_target = ""
+        for ans in cname_data.get("Answer", []):
+            if ans.get("type") == 5:
+                cname_target = ans.get("data", "")
+                break
+        if dns_status != 0:  # NXDOMAIN
+            if cname_target:  # Dangling CNAME = real takeover candidate
+                return {"type": "SUBDOMAIN_TAKEOVER", "url": url, "severity": "HIGH", "confidence": "HIGH",
+                        "detail": f"NXDOMAIN + dangling CNAME → {cname_target}"}
+            return None  # NXDOMAIN without CNAME = just unconfigured, not exploitable
+        # Step 3: Even if DNS resolves, check HTTP for takeover fingerprints
+        try:
+            rh = requests.get(url, headers=get_stealth_headers(), timeout=5, verify=False)
+            for fingerprint, provider in TAKEOVER_FINGERPRINTS:
+                if fingerprint in rh.text:
+                    return {"type": "SUBDOMAIN_TAKEOVER", "url": url, "severity": "HIGH", "confidence": "HIGH",
+                            "detail": f"Takeover fingerprint for {provider} detected"}
+        except: pass
     except Exception: pass
 
 def check_sensitive_single(url, b_status=None, b_len=None):
@@ -258,20 +405,65 @@ def check_sensitive_single(url, b_status=None, b_len=None):
 
 def check_sqli_single(target, payload):
     try:
+        # Step 1: Baseline timing (clean request to base URL)
+        base_url = target.split("?")[0]
+        try:
+            bs = time.time()
+            requests.get(base_url, headers=get_stealth_headers(), timeout=8, verify=False)
+            baseline = time.time() - bs
+        except:
+            baseline = 0.5
+        
+        # Step 2: Test with payload
         start = time.time()
-        r = requests.get(target, headers=get_stealth_headers(), timeout=6, verify=False)
+        r = requests.get(target, headers=get_stealth_headers(), timeout=12, verify=False)
         el = time.time() - start
+        
         if r.status_code == 500:
-            return {"type": "SQLI_ERROR", "url": target, "severity": "HIGH"}
-        elif el > 4.5 and "WAITFOR" in payload:
-            return {"type": "SQLI_TIME", "url": target, "severity": "CRITICAL"}
+            # Only flag if response contains actual SQL error strings
+            sql_indicators = ["sql", "syntax", "mysql", "ora-", "postgres", "sqlite", "odbc", "microsoft"]
+            if any(ind in r.text.lower() for ind in sql_indicators):
+                return {"type": "SQLI_ERROR", "url": target, "severity": "HIGH", "confidence": "HIGH",
+                        "detail": "SQL error string in 500 response"}
+            return None  # Generic 500 is NOT sql injection
+        
+        elif "WAITFOR" in payload:
+            delay = el - baseline
+            # Require delay to be at least 3.5s MORE than baseline
+            if delay >= 3.5 and el >= 4.5:
+                # VERIFY: Send payload a second time
+                time.sleep(0.3)
+                s2 = time.time()
+                requests.get(target, headers=get_stealth_headers(), timeout=12, verify=False)
+                el2 = time.time() - s2
+                if el2 >= 4.0 and (el2 - baseline) >= 3.0:
+                    return {"type": "SQLI_TIME", "url": target, "severity": "CRITICAL", "confidence": "HIGH",
+                            "detail": f"Baseline:{baseline:.1f}s Delay1:{el:.1f}s Delay2:{el2:.1f}s (verified)"}
+            return None  # Slow server, not SQLi
     except Exception: pass
 
 def check_idor_single(target, b_len):
     try:
-        r = requests.get(target, headers=get_stealth_headers(), timeout=3, verify=False)
-        if r.status_code == 200 and abs(len(r.text) - b_len) > 500:
-            return {"type": "IDOR_CANDIDATE", "url": target, "severity": "HIGH"}
+        r1 = requests.get(target, headers=get_stealth_headers(), timeout=3, verify=False)
+        if r1.status_code != 200:
+            return None
+        time.sleep(0.2)
+        # Consistency check: same request again
+        r2 = requests.get(target, headers=get_stealth_headers(), timeout=3, verify=False)
+        if r2.status_code != 200:
+            return None
+        len1, len2 = len(r1.text), len(r2.text)
+        if abs(len1 - len2) > 200:
+            return None  # Page content varies between identical requests — dynamic page, not IDOR
+        avg_len = (len1 + len2) / 2
+        diff = abs(avg_len - b_len)
+        if diff > 1000:  # Require significant difference
+            data_indicators = ['"email"', '"username"', '"user_id"', '"name"', '"address"',
+                             '"phone"', '"balance"', '"account"', '"token"', '"password"']
+            has_data = any(ind in r1.text.lower() for ind in data_indicators)
+            if has_data:
+                return {"type": "IDOR_CANDIDATE", "url": target, "severity": "HIGH", "confidence": "MEDIUM",
+                        "detail": f"Unique response ({int(diff)} bytes diff) with data indicators"}
     except Exception: pass
 
 def get_bin(name):
@@ -395,6 +587,7 @@ def check_shodan(domain):
 # --- Engine ---
 def scan_target_fast(handle, urls):
     urls = list(urls)
+    findings = []  # Initialize BEFORE any use
     log(f"--- Scanning {handle} ({len(urls)} initial URLs) ---")
     if urls:
         base_domain = urlparse(urls[0]).hostname
@@ -414,7 +607,6 @@ def scan_target_fast(handle, urls):
                 findings.extend(sho)
             
     log(f"[*] Final scan scope: {len(urls)} URLs")
-    findings = []
     
     tasks = []
     with ThreadPoolExecutor(max_workers=50) as executor:
@@ -500,19 +692,24 @@ def main():
         all_findings.extend(scan_target_fast(handle, urls))
         
     new_count = 0
+    verified_count = 0
     for f in all_findings:
         sig = f"{f.get('type')}_{f.get('url')}"
         if sig not in previous_sigs:
             new_count += 1
+            # AI exploit + proof (only for HIGH confidence, HIGH/CRITICAL severity)
+            if f.get("confidence") in ["HIGH", "MEDIUM"] and f.get("severity") in ["HIGH", "CRITICAL"]:
+                proof = ai_exploit_and_prove(f)
+                if proof and proof.get("verified"):
+                    verified_count += 1
             send_discord_webhook(f)
             generate_ai_report(f)
             create_notion_ticket(f)
             push_to_graph(f)
             generate_nuclei_template(f)
 
-            
     out.write_text(json.dumps(all_findings, indent=2))
-    log(f"Finished! Found {new_count} NEW issues out of {len(all_findings)} total. Results saved to {out}")
+    log(f"Finished! {new_count} NEW, {verified_count} AI-VERIFIED out of {len(all_findings)} total. Saved to {out}")
 
 if __name__ == "__main__":
     main()

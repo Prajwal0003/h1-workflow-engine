@@ -177,9 +177,9 @@ def index():
     success = False
     if request.method == "POST":
         with open(".env", "w") as f:
-            f.write("# Aegis-Auto Configuration File\\n")
+            f.write("# Aegis-Auto Configuration File\n")
             for key, value in request.form.items():
-                f.write(f"{key}={value}\\n")
+                f.write(f"{key}={value}\n")
         success = True
     return render_template_string(HTML, env=parse_env(), success=success)
 
