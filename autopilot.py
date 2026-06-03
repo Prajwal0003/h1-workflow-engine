@@ -650,20 +650,47 @@ def check_js_secrets(url):
     try:
         r = requests.get(url, headers=get_stealth_headers(), timeout=5, verify=False)
         html = r.text
+        
+        # Helper to process text for secrets
+        def extract_secrets(source_text, source_url):
+            for name, pattern in SECRET_REGEXES.items():
+                matches = re.findall(pattern, source_text)
+                for m in set(matches):
+                    if name == "GOOGLE_MAPS_KEY":
+                        # VERIFY the Google Maps key
+                        test_url = f"https://maps.googleapis.com/maps/api/staticmap?center=45%2C10&zoom=7&size=400x400&key={m}"
+                        try:
+                            r_test = requests.get(test_url, timeout=5)
+                            if r_test.status_code == 200:
+                                findings.append({
+                                    "type": "VULNERABLE_GOOGLE_MAPS_KEY",
+                                    "url": source_url,
+                                    "severity": "HIGH",
+                                    "confidence": "HIGH",
+                                    "detail": f"Key {m} has UNRESTRICTED StaticMap API access (Billing Abuse possible)"
+                                })
+                        except: pass
+                    else:
+                        findings.append({
+                            "type": f"EXPOSED_SECRET_{name}",
+                            "url": source_url,
+                            "severity": "CRITICAL",
+                            "confidence": "HIGH",
+                            "detail": f"Found {name} in source"
+                        })
+                        
+        # 1. Check the main HTML page
+        extract_secrets(html, url)
+        
+        # 2. Check all included external scripts
         scripts = re.findall(r'<script[^>]+src="([^">]+)"', html)
         for s in scripts:
             if not s.startswith("http"):
                 s = urlparse(url).scheme + "://" + urlparse(url).hostname + ("/" + s if not s.startswith("/") else s)
-            sr = requests.get(s, headers=get_stealth_headers(), timeout=5, verify=False)
-            for name, pattern in SECRET_REGEXES.items():
-                matches = re.findall(pattern, sr.text)
-                for m in set(matches):
-                    findings.append({
-                        "type": f"EXPOSED_SECRET_{name}",
-                        "url": s,
-                        "severity": "CRITICAL",
-                        "detail": f"Found {name}"
-                    })
+            try:
+                sr = requests.get(s, headers=get_stealth_headers(), timeout=5, verify=False)
+                extract_secrets(sr.text, s)
+            except: pass
     except: pass
     return findings if findings else None
 
