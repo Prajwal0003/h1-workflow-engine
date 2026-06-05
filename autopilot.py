@@ -119,6 +119,13 @@ STATE_DIFF_ENGINE = None
 if FEATURES_LOADED:
     STATE_DIFF_ENGINE = StateDiffEngine("data/state_snapshots")
 
+def send_discord(msg):
+    if not DISCORD_WEBHOOK_URL or "your_discord_webhook" in DISCORD_WEBHOOK_URL:
+        return
+    try:
+        requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=3)
+    except: pass
+
 def send_discord_webhook(finding):
     if not DISCORD_WEBHOOK_URL or "your_discord_webhook" in DISCORD_WEBHOOK_URL:
         return
@@ -1124,7 +1131,13 @@ def main():
             except: pass
             
         current_programs = set(targets.keys())
-        new_programs = current_programs - known_programs
+        
+        if not known_programs:
+            log("[*] No baseline found. Initializing known programs baseline silently (no alerts).")
+            known_programs_file.write_text(json.dumps(list(current_programs)))
+            new_programs = set()
+        else:
+            new_programs = current_programs - known_programs
         
         if new_programs:
             log(f"[*] 🚨 FOUND {len(new_programs)} NEW BUG BOUNTY PROGRAMS 🚨")
