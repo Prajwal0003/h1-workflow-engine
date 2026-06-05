@@ -44,7 +44,7 @@ jobs:
 
       - name: Install Full Tool Arsenal
         run: python setup_tools.py
-        timeout-minutes: 15
+        timeout-minutes: 45
 
       - name: Run Autopilot Engine (Dynamic Targets — Full Scanner Suite)
         run: python autopilot.py --dynamic
