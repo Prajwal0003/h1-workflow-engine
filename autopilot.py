@@ -1206,12 +1206,17 @@ def main():
                 if proof and proof.get("verified"):
                     verified_count += 1
             
-            # If the AI tested the exploit and it failed, drop the finding completely
-            if f.get("verified") is False:
-                log(f"[*] Dropping {f.get('type')} on {f.get('url')} because AI verification failed.")
-                continue
-
+            # --- STRICT ZERO-TRUST AI FILTER ---
+            # If it's a vulnerability, we ONLY send it to Discord if the AI can mathematically prove it 
+            # or if the static triage is absolutely certain it's real.
             if f.get("severity") in ["MEDIUM", "HIGH", "CRITICAL"]:
+                triage_verdict = f.get("ai_triage", {}).get("verdict")
+                
+                if f.get("verified") is not True and triage_verdict != "TRUE_POSITIVE":
+                    log(f"[*] 🛡️ STRICT AI FILTER: Dropping unverified {f.get('type')} on {f.get('url')} to prevent false positives.")
+                    continue
+                
+                # If it survived the strict filter, it is a HIGH-CONFIDENCE REAL BUG!
                 send_discord_webhook(f)
                 generate_ai_report(f)
                 create_notion_ticket(f)
