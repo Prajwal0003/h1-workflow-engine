@@ -36,7 +36,7 @@ USER_AGENTS = [
 def _call_gemini(prompt, api_key):
     import requests
     if not api_key or "your_" in api_key: return None
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     payload = {"contents": [{"parts":[{"text": prompt}]}]}
     try:
         r = requests.post(api_url, json=payload, headers={"Content-Type": "application/json"}, timeout=15)
