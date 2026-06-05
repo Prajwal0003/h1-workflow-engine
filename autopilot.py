@@ -67,6 +67,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # --- Config ---
 MODELS = ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.5-flash"]
 TARGETS_DIR = Path("data/selected_targets")
+DATA_DIR = Path("data")
 RESULTS_DIR = Path("data/autopilot")
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 REPORTS_DIR = Path('reports')
