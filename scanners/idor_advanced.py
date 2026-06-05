@@ -32,37 +32,48 @@ def check_idor_advanced(url):
 
     for ep_template in IDOR_ENDPOINTS:
         # Test with sequential IDs
-        for test_id in ["1", "2", "100", "admin"]:
-            ep = ep_template.replace("{id}", test_id)
-            target = f"{base}{ep}"
+        for test_id in [1, 2, 100]:
+            ep1 = ep_template.replace("{id}", str(test_id))
+            target1 = f"{base}{ep1}"
 
-            r = safe_get(target)
-            if not r or r.status_code != 200:
+            r1 = safe_get(target1, allow_redirects=False)
+            if not r1 or r1.status_code != 200:
                 continue
 
-            ct = r.headers.get("Content-Type", "")
-            is_json = "application/json" in ct
+            ct1 = r1.headers.get("Content-Type", "")
+            is_json = "application/json" in ct1
 
-            if not is_json and len(r.text) < 50:
+            if not is_json and len(r1.text) < 50:
                 continue
 
             # Check for sensitive data in response
-            has_sensitive = any(marker in r.text.lower() for marker in SENSITIVE_DATA_MARKERS)
-            if not has_sensitive:
+            if not any(marker in r1.text.lower() for marker in SENSITIVE_DATA_MARKERS):
                 continue
 
-            # Verify with a random ID to ensure it's not a static response
-            random_id = str(random.randint(99990, 99999))
-            ep_random = ep_template.replace("{id}", random_id)
-            r_random = safe_get(f"{base}{ep_random}")
+            # Test ID+1
+            ep2 = ep_template.replace("{id}", str(test_id + 1))
+            target2 = f"{base}{ep2}"
+            r2 = safe_get(target2, allow_redirects=False)
+            
+            # If ID+1 doesn't exist or redirects, it's not a reliable comparison
+            if not r2 or r2.status_code != 200:
+                continue
+                
+            if not any(marker in r2.text.lower() for marker in SENSITIVE_DATA_MARKERS):
+                continue
 
-            if r_random and abs(len(r.text) - len(r_random.text)) > 100:
+            # Both returned 200 OK with sensitive data. Compare sizes.
+            diff_bytes = abs(len(r1.text) - len(r2.text))
+            
+            if diff_bytes > 20: # Meaning they are two DIFFERENT valid user objects
                 findings.append({
                     "type": "IDOR",
-                    "url": target,
-                    "severity": "HIGH",
-                    "confidence": "HIGH",
-                    "detail": f"IDOR: different user data returned for ID={test_id} vs ID={random_id} ({abs(len(r.text) - len(r_random.text))} byte diff)"
+                    "url": target1,
+                    "severity": "MEDIUM",  # Start medium, flag for review
+                    "confidence": "MEDIUM",
+                    "duplicate_risk": "LOW",
+                    "requires_manual_verification": True,
+                    "detail": f"Potential IDOR: Valid distinct responses for ID={test_id} and ID={test_id+1} ({diff_bytes} byte diff). Needs manual review!"
                 })
                 break  # One IDOR per endpoint template is enough
 

@@ -45,6 +45,8 @@ try:
     from scanners.subdomain_permutation import generate_permutations
     from scanners.command_injection import check_command_injection
     from scanners.idor_advanced import check_idor_advanced
+    from scanners.api_versioning import check_api_versioning
+    from scanners.rate_limit import check_rate_limit
     SCANNERS_LOADED = True
 except ImportError as e:
     print(f"[!] Some scanner modules not loaded: {e}")
@@ -418,14 +420,36 @@ def push_to_graph(finding):
         v_type = finding.get('type', 'unknown')
         severity = finding.get('severity', 'LOW')
         domain = urlparse(url).hostname if url else "unknown"
-        query = '''
+        
+        # Check for prior reports of this type on this program to assess duplicate risk
+        check_query = '''
+        MATCH (f:Finding {type: $v_type, program: $program})
+        RETURN count(f) as prior_reports
+        '''
+        
+        insert_query = '''
         MERGE (p:Program {name: $program})
         MERGE (d:Domain {name: $domain})
-        MERGE (v:Vulnerability {type: $v_type, url: $url, severity: $severity})
+        MERGE (vt:VulnType {name: $v_type})
+        MERGE (v:Finding {type: $v_type, url: $url, severity: $severity, program: $program})
+        MERGE (v)-[:STATUS]->(s:Status {state: 'pending'})
+        MERGE (v)-[:TYPE]->(vt)
         MERGE (p)-[:OWNS]->(d)
         MERGE (d)-[:HAS_VULN]->(v)
         '''
+        
+        prior_reports = 0
         with driver.session() as session:
+            result = session.run(check_query, v_type=v_type, program=program)
+            for record in result:
+                prior_reports = record["prior_reports"]
+            
+            session.run(insert_query, program=program, domain=domain, v_type=v_type, url=url, severity=severity)
+            
+        driver.close()
+        return prior_reports
+    except Exception as e:
+        return 0
             session.run(query, program=program, domain=domain, v_type=v_type, url=url, severity=severity)
         driver.close()
     except Exception as e: pass
@@ -548,17 +572,40 @@ def check_host_header(url):
 
 def check_graphql(url):
     try:
-        # Check if GraphQL endpoint exists
         endpoints = ["/graphql", "/api/graphql", "/v1/graphql", "/graphiql"]
         base = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
         
-        query = {"query": "{ __schema { types { name } } }"}
+        query = {"query": "query IntrospectionQuery { __schema { queryType { name } mutationType { name } types { ...FullType } } } fragment FullType on __Type { kind name fields(includeDeprecated: true) { name args { name type { name } } type { name } } }"}
+        
         for ep in endpoints:
             target = f"{base}{ep}"
-            r = requests.post(target, headers=get_stealth_headers(), json=query, timeout=5, verify=False)
+            r = requests.post(target, headers=get_stealth_headers(), json=query, timeout=7, verify=False)
             if r.status_code == 200 and "__schema" in r.text and "types" in r.text:
-                return {"type": "GRAPHQL_INTROSPECTION", "url": target, "severity": "MEDIUM", "confidence": "HIGH",
-                        "detail": "GraphQL Introspection is enabled (schema leak)"}
+                
+                # Check for dangerous mutations
+                mutations = []
+                dangerous_kws = ["admin", "delete", "update", "password", "user", "token", "role"]
+                
+                try:
+                    schema = r.json()
+                    types = schema.get("data", {}).get("__schema", {}).get("types", [])
+                    for t in types:
+                        if t.get("name") == "Mutation" and t.get("fields"):
+                            for f in t["fields"]:
+                                fname = f.get("name", "").lower()
+                                if any(kw in fname for kw in dangerous_kws):
+                                    mutations.append(f.get("name"))
+                except:
+                    pass
+                
+                detail = "GraphQL Introspection is enabled (schema leak)"
+                severity = "MEDIUM"
+                if mutations:
+                    detail += f". Dangerous mutations exposed: {', '.join(mutations[:5])}"
+                    severity = "HIGH"
+                    
+                return {"type": "GRAPHQL_INTROSPECTION", "url": target, "severity": severity, "confidence": "HIGH",
+                        "requires_manual_verification": True, "duplicate_risk": "MEDIUM", "detail": detail}
     except Exception: pass
     return None
 
@@ -577,25 +624,57 @@ def check_security_headers(url):
 
 def check_cors(url):
     try:
-        h1 = {**get_stealth_headers(), "Origin": "https://evil.com"}
-        r = requests.get(url, headers=h1, timeout=3, verify=False)
-        acao = r.headers.get("Access-Control-Allow-Origin", "")
-        acac = r.headers.get("Access-Control-Allow-Credentials", "").lower()
-        if acao != "https://evil.com":
+        def test_origin(origin_val):
+            h = {**get_stealth_headers(), "Origin": origin_val}
+            r = requests.get(url, headers=h, timeout=3, verify=False, allow_redirects=False)
+            return r
+
+        r1 = test_origin("https://evil.com")
+        acao1 = r1.headers.get("Access-Control-Allow-Origin", "")
+        
+        # Test null origin
+        r_null = test_origin("null")
+        acao_null = r_null.headers.get("Access-Control-Allow-Origin", "")
+        
+        if acao1 != "https://evil.com" and acao_null != "null":
             return None
-        # Verify: test with a SECOND random origin to confirm true reflection
-        rand_origin = f"https://attacker-{random.randint(1000,9999)}.com"
-        h2 = {**get_stealth_headers(), "Origin": rand_origin}
-        r2 = requests.get(url, headers=h2, timeout=3, verify=False)
+            
+        r2 = test_origin(f"https://attacker-{random.randint(1000,9999)}.com")
         acao2 = r2.headers.get("Access-Control-Allow-Origin", "")
-        if acao2 != rand_origin:
-            return None  # Only reflects specific origin, not arbitrary — false positive
-        if acac == "true":
+        
+        is_vuln = False
+        origin_type = ""
+        if acao1 == "https://evil.com" and acao2.startswith("https://attacker-"):
+            is_vuln = True
+            origin_type = "arbitrary origins"
+            r_vuln = r2
+        elif acao_null == "null":
+            is_vuln = True
+            origin_type = "null origin"
+            r_vuln = r_null
+            
+        if not is_vuln:
+            return None
+
+        acac = r_vuln.headers.get("Access-Control-Allow-Credentials", "").lower() == "true"
+        expose = r_vuln.headers.get("Access-Control-Expose-Headers", "").lower()
+        
+        sensitive_headers = ["authorization", "x-auth-token", "set-cookie", "x-user-id"]
+        exposed_sensitive = [h for h in sensitive_headers if h in expose]
+
+        # Ensure response has body and is not a 404/error page
+        if len(r_vuln.text) < 10 or r_vuln.status_code >= 400:
+            return None
+
+        if exposed_sensitive and acac:
+            return {"type": "CORS_REFLECTION", "url": url, "severity": "CRITICAL", "confidence": "HIGH",
+                    "detail": f"Reflects {origin_type} + Credentials + Exposes {', '.join(exposed_sensitive)}"}
+        elif acac:
             return {"type": "CORS_REFLECTION", "url": url, "severity": "HIGH", "confidence": "HIGH",
-                    "detail": "Reflects ANY Origin + allows Credentials — exploitable for data theft"}
+                    "detail": f"Reflects {origin_type} + allows Credentials"}
         else:
-            return {"type": "CORS_REFLECTION", "url": url, "severity": "LOW", "confidence": "MEDIUM",
-                    "detail": "Reflects Origin but NO credentials — limited impact"}
+            return {"type": "CORS_REFLECTION", "url": url, "severity": "MEDIUM", "confidence": "MEDIUM",
+                    "detail": f"Reflects {origin_type} but NO credentials"}
     except Exception: pass
 
 def check_takeover(url):
@@ -950,6 +1029,8 @@ def scan_target_fast(handle, target_data):
             # === NEW: Awesome Bug Bounty Tools — Full Scanner Suite ===
             if SCANNERS_LOADED:
                 # Exploitation scanners
+                tasks.append(executor.submit(check_api_versioning, b))
+                tasks.append(executor.submit(check_rate_limit, b))
                 tasks.append(executor.submit(check_xss, b))
                 tasks.append(executor.submit(check_dom_xss, b))
                 tasks.append(executor.submit(check_ssrf, b))
@@ -1199,10 +1280,39 @@ def main():
     valid_findings = []
     needs_review_findings = []
     
+    try:
+        exclusions = json.loads((DATA_DIR / "scope_exclusions.json").read_text())
+    except Exception:
+        exclusions = {"global_exclusions": [], "programs": {}}
+
+    duplicate_risk_map = {
+        "CORS_REFLECTION": "VERY HIGH",
+        "SUBDOMAIN_TAKEOVER": "HIGH",
+        "GIT_EXPOSURE": "HIGH",
+        "HOST_HEADER_INJECTION": "MEDIUM",
+        "IDOR": "LOW",
+        "BUSINESS_LOGIC": "VERY LOW"
+    }
+
+    verified_findings = []
+    needs_review_findings = []
+    noise_findings = []
+    
     for f in all_findings:
         sig = f"{f.get('type')}_{f.get('url')}"
         if sig not in previous_sigs:
             new_count += 1
+            f["estimated_duplicate_risk"] = duplicate_risk_map.get(f.get("type"), "MEDIUM")
+            f["confidence_score"] = 50 # Default 0-100 score
+            
+            # Scope check
+            prog = f.get("program", "unknown")
+            ex_list = exclusions.get("global_exclusions", []) + exclusions.get("programs", {}).get(prog, [])
+            if f.get("type") in ex_list:
+                f["scope_verified"] = False
+                f["verify_scope_before_submitting"] = True
+            else:
+                f["scope_verified"] = True
 
             # === Feature 1: AI Triage (before PoC generation) ===
             if FEATURES_LOADED and GEMINI_API_KEY and "your_" not in GEMINI_API_KEY:
@@ -1215,6 +1325,8 @@ def main():
                         if triage.get("verdict") == "FALSE_POSITIVE" and triage.get("confidence", 0) >= 0.7:
                             log(f"[*] 🗑️ AI Triage: Dropping {f.get('type')} — {triage.get('reasoning', '')[:80]}")
                             dropped_by_triage += 1
+                            f["confidence_score"] = 10
+                            noise_findings.append(f)
                             continue
 
                         # Adjust severity if AI recommends
@@ -1224,22 +1336,35 @@ def main():
                             log(f"  [AI Triage] Severity adjusted: {old_sev} → {f['severity']}")
 
                         # Boost confidence if AI confirms
-                        if triage.get("verdict") == "TRUE_POSITIVE" and triage.get("confidence", 0) >= 0.8:
-                            f["confidence"] = "HIGH"
+                        if triage.get("verdict") == "TRUE_POSITIVE":
+                            f["confidence_score"] = int(triage.get("confidence", 0.8) * 100)
                             f["ai_confirmed"] = True
                     except Exception as e:
                         pass
                     time.sleep(0.5)  # Rate limit Gemini calls
 
             # AI exploit + proof (only for HIGH/MEDIUM confidence, MEDIUM/HIGH/CRITICAL severity)
-            if f.get("confidence") in ["HIGH", "MEDIUM"] and f.get("severity") in ["MEDIUM", "HIGH", "CRITICAL"]:
+            if f.get("confidence_score") >= 50 and f.get("severity") in ["MEDIUM", "HIGH", "CRITICAL"]:
                 proof = ai_exploit_and_prove(f)
                 if proof and proof.get("verified"):
                     verified_count += 1
-            
+                    f["confidence_score"] = 100
+
             # --- STRICT ZERO-TRUST AI FILTER ---
-            # If it's a vulnerability, we ONLY send it to Discord if the AI can mathematically prove it 
-            # or if the static triage is absolutely certain it's real.
+            # Readiness check
+            reasons = []
+            if not f.get("scope_verified"): reasons.append("Excluded by scope")
+            if f.get("type") == "CORS_REFLECTION" and "Credentials" not in str(f.get("detail", "")): reasons.append("CORS without credentials")
+            if not f.get("verified"): reasons.append("No exploit PoC")
+            
+            if not reasons:
+                f["status"] = "READY_TO_REPORT"
+                f["requires_manual_verification"] = False
+            else:
+                f["status"] = "NEEDS_MANUAL_REVIEW"
+                f["readiness_reasons"] = reasons
+                f["requires_manual_verification"] = True
+
             if f.get("severity") in ["MEDIUM", "HIGH", "CRITICAL"]:
                 triage_verdict = f.get("ai_triage", {}).get("verdict")
                 
@@ -1249,25 +1374,39 @@ def main():
                     continue
                 
                 # If it survived the strict filter, it is a HIGH-CONFIDENCE REAL BUG!
+                if f.get("estimated_duplicate_risk") in ["VERY HIGH", "HIGH"]:
+                    log(f"⚠️ WARNING: {f.get('type')} has {f.get('estimated_duplicate_risk')} duplicate risk. Verify before submitting!")
+                
                 send_discord_webhook(f)
                 generate_ai_report(f)
                 create_notion_ticket(f)
-                push_to_graph(f)
+                prior_reports = push_to_graph(f)
+                if prior_reports > 0:
+                    f["estimated_duplicate_risk"] = "VERY HIGH"
+                    log(f"⚠️ HIGH DUPLICATE RISK: {prior_reports} prior {f.get('type')} reports found in Neo4j for {f.get('program')}!")
+                    
                 generate_nuclei_template(f)
-            
-            valid_findings.append(f)
+                verified_findings.append(f)
+            else:
+                # INFO/LOW severity
+                noise_findings.append(f)
         else:
-            valid_findings.append(f)
+            # Already seen
+            pass
 
-    out.write_text(json.dumps(valid_findings, indent=2))
-    
+    # Sorting verified findings by confidence and inverse of duplicate risk
+    risk_weights = {"VERY HIGH": 1, "HIGH": 2, "MEDIUM": 3, "LOW": 4, "VERY LOW": 5}
+    verified_findings.sort(key=lambda x: x.get("confidence_score", 0) * risk_weights.get(x.get("estimated_duplicate_risk"), 3), reverse=True)
+
+    if verified_findings:
+        (RESULTS_DIR / "verified_findings.json").write_text(json.dumps(verified_findings, indent=2))
     if needs_review_findings:
-        review_out = RESULTS_DIR / "needs_review.json"
-        review_out.write_text(json.dumps(needs_review_findings, indent=2))
-        log(f"[*] Saved {len(needs_review_findings)} unverified findings to {review_out} for manual review.")
+        (RESULTS_DIR / "needs_review.json").write_text(json.dumps(needs_review_findings, indent=2))
+    if noise_findings:
+        (RESULTS_DIR / "noise.json").write_text(json.dumps(noise_findings, indent=2))
         
     log(f"Finished! {new_count} NEW, {verified_count} AI-VERIFIED, {triaged_count} AI-TRIAGED "
-        f"({dropped_by_triage} false positives dropped) out of {len(valid_findings)} total. Saved to {out}")
+        f"({dropped_by_triage} false positives dropped). Saved to {RESULTS_DIR}")
 
 if __name__ == "__main__":
     main()

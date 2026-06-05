@@ -27,6 +27,8 @@ from .postmessage import check_postmessage
 from .subdomain_permutation import generate_permutations
 from .command_injection import check_command_injection
 from .idor_advanced import check_idor_advanced
+from .api_versioning import check_api_versioning
+from .rate_limit import check_rate_limit
 
 __all__ = [
     "check_xss", "check_dom_xss", "check_ssrf", "check_ssti", "check_csrf",
@@ -36,5 +38,5 @@ __all__ = [
     "detect_waf", "check_ports", "check_technologies", "discover_parameters",
     "discover_links_and_js", "check_advanced_secrets", "check_insecure_deserialization",
     "check_postmessage", "generate_permutations", "check_command_injection",
-    "check_idor_advanced",
+    "check_idor_advanced", "check_api_versioning", "check_rate_limit",
 ]

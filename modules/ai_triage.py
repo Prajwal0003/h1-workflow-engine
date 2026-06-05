@@ -129,17 +129,19 @@ BASELINE (Clean Request to Root):
 
 ANALYSIS INSTRUCTIONS:
 1. Is this a TRUE POSITIVE (real vulnerability) or FALSE POSITIVE?
-2. Common false positive patterns to check for:
-   - WAF/CDN blocking the request and returning a generic page
+2. Pre-submission verification checks:
+   - Check for WAF blocks ("Request Rejected", "support ID", etc.)
+   - Check for redirects masquerading as sensitive file exposure
+   - For CORS vulnerabilities: Check if access-control-allow-credentials flag is present in the response. If missing, it's FALSE_POSITIVE or low severity.
    - Soft 404 pages that return HTTP 200 but show error content
-   - Static pages that reflect parameters in benign ways (e.g., breadcrumbs, search queries)
-   - Generic error pages that happen to contain SQL-like keywords
-   - Rate limiting or bot detection pages
    - The response body being identical or nearly identical to the baseline
-3. If TRUE POSITIVE, does the evidence warrant the reported severity or should it be adjusted?
+3. Duplicate Risk Assessment:
+   - Based on common bug bounty patterns, rate the duplicate risk: LOW, MEDIUM, HIGH, or VERY_HIGH.
+   - For example, basic CORS or missing headers are usually VERY_HIGH. IDORs or Logic bugs are LOW.
+4. If TRUE POSITIVE, does the evidence warrant the reported severity or should it be adjusted?
 
 RESPOND IN EXACTLY THIS JSON FORMAT (no markdown, no code blocks):
-{{"verdict": "TRUE_POSITIVE" or "FALSE_POSITIVE" or "NEEDS_REVIEW", "confidence": 0.0 to 1.0, "reasoning": "brief explanation", "severity_adjust": null or "CRITICAL" or "HIGH" or "MEDIUM" or "LOW"}}
+{{"verdict": "TRUE_POSITIVE" or "FALSE_POSITIVE" or "NEEDS_REVIEW", "confidence": 0.0 to 1.0, "reasoning": "explanation of WAF/redirect checks", "severity_adjust": null or "CRITICAL" or "HIGH" or "MEDIUM" or "LOW", "duplicate_risk": "VERY_HIGH" or "HIGH" or "MEDIUM" or "LOW"}}
 """
 
     def _parse(resp):
