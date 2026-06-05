@@ -2,8 +2,12 @@ name: Bug Bounty Scan
 
 on:
   schedule:
-    - cron: '0 */5 * * *' # Run every 5 hours automatically
+    - cron: '0 * * * *' # Run every hour automatically
   workflow_dispatch: # Allow manual triggering from the GitHub Actions tab
+
+concurrency:
+  group: scanner-workflow
+  cancel-in-progress: false
 
 jobs:
   recon-and-scan:
