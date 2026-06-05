@@ -17,6 +17,7 @@ import tarfile
 import subprocess
 from pathlib import Path
 import shutil
+import re
 
 TOOLS_DIR = Path("tools")
 TOOLS_DIR.mkdir(exist_ok=True)
@@ -397,6 +398,47 @@ if __name__ == "__main__":
     install_git_tool("https://github.com/epinna/tplmap.git", "tplmap")
     install_git_tool("https://github.com/0xInfection/XSRFProbe.git", "xsrfprobe")
 
+def install_awesome_bugbounty_tools_mass():
+    print("\n--- Mass Cloning awesome-bugbounty-tools ---")
+    mass_dir = TOOLS_DIR / "awesome_mass"
+    mass_dir.mkdir(exist_ok=True)
+
+    print("[*] Fetching awesome-bugbounty-tools README...")
+    try:
+        url = "https://raw.githubusercontent.com/vavkamil/awesome-bugbounty-tools/master/README.md"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as response:
+            content = response.read().decode('utf-8')
+
+        # Find all github repo links
+        repos = re.findall(r'https://github\.com/([\w\-]+)/([\w\-]+)', content)
+        # Remove duplicates while preserving order
+        unique_repos = list(dict.fromkeys(repos))
+
+        print(f"[*] Found {len(unique_repos)} potential tools to clone!")
+
+        # Clone up to 100 tools to avoid timeout limits, skipping the main list repo itself
+        count = 0
+        for owner, repo in unique_repos:
+            if count >= 100:
+                print("[*] Reached mass clone limit of 100 tools.")
+                break
+            if repo.lower() == "awesome-bugbounty-tools":
+                continue
+
+            repo_url = f"https://github.com/{owner}/{repo}.git"
+            dest = mass_dir / repo
+            if not dest.exists():
+                print(f"[*] Mass cloning {repo}...")
+                subprocess.run(["git", "clone", "--depth", "1", repo_url, str(dest)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            count += 1
+
+        print("[+] Mass clone complete!")
+    except Exception as e:
+        print(f"[-] Failed mass clone: {e}")
+
+    install_awesome_bugbounty_tools_mass()
+
     # === Wordlists & Config ===
     download_wordlists()
     create_env_template()
@@ -404,5 +446,6 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("  [+] Full Arsenal Installed!")
     print("  [+] Tools: tools/")
+    print("  [+] Mass Tools: tools/awesome_mass/")
     print("  [+] Wordlists: wordlists/")
     print("=" * 60)
