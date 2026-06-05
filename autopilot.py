@@ -13,6 +13,55 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
+os.environ["PYTHONIOENCODING"] = "utf-8"
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except AttributeError:
+    pass
+
+# --- Awesome Bug Bounty Tools — Full Scanner Suite ---
+try:
+    from scanners.xss import check_xss, check_dom_xss
+    from scanners.ssrf import check_ssrf
+    from scanners.ssti import check_ssti
+    from scanners.csrf import check_csrf
+    from scanners.xxe import check_xxe
+    from scanners.smuggling import check_request_smuggling
+    from scanners.race import check_race_condition
+    from scanners.cache_poison import check_cache_poisoning
+    from scanners.jwt import check_jwt_vulnerabilities
+    from scanners.cms import check_cms_vulnerabilities
+    from scanners.buckets import check_s3_buckets
+    from scanners.git_exposure import check_git_exposure
+    from scanners.dir_traversal import check_directory_traversal
+    from scanners.waf import detect_waf
+    from scanners.port_scan import check_ports
+    from scanners.tech_detect import check_technologies
+    from scanners.param_discovery import discover_parameters
+    from scanners.link_discovery import discover_links_and_js
+    from scanners.secrets_advanced import check_advanced_secrets
+    from scanners.deserialization import check_insecure_deserialization
+    from scanners.postmessage import check_postmessage
+    from scanners.subdomain_permutation import generate_permutations
+    from scanners.command_injection import check_command_injection
+    from scanners.idor_advanced import check_idor_advanced
+    SCANNERS_LOADED = True
+except ImportError as e:
+    print(f"[!] Some scanner modules not loaded: {e}")
+    SCANNERS_LOADED = False
+
+# --- Feature Modules ---
+try:
+    from modules.ai_triage import ai_triage_finding, batch_triage
+    from modules.idor_detector import DualSessionIDORDetector, check_idor_dual_session
+    from modules.state_diff import StateDiffEngine
+    from modules.waf_evasion import WAFEvasionEngine, is_waf_blocked
+    from modules.context_payloads import ContextPayloadGenerator
+    FEATURES_LOADED = True
+except ImportError as e:
+    print(f"[!] Some feature modules not loaded: {e}")
+    FEATURES_LOADED = False
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- Config ---
@@ -34,7 +83,8 @@ def get_stealth_headers():
     return {
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "*/*",
-        "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}"
+        "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}",
+        "X-Hackerone": "suppliertest"
     }
 
 ENV_VARS = {}
@@ -45,7 +95,8 @@ if Path(".env").exists():
             ENV_VARS[k.strip()] = v.strip()
 
 DISCORD_WEBHOOK_URL = ENV_VARS.get("DISCORD_WEBHOOK_URL", "")
-GEMINI_API_KEY = ENV_VARS.get("GEMINI_API_KEY", "")
+GROQ_API_KEY = ENV_VARS.get("GROQ_API_KEY", "")
+GROQ_API_KEY = ENV_VARS.get("GROQ_API_KEY", "").strip('"\'')
 SHODAN_API_KEY = ENV_VARS.get("SHODAN_API_KEY", "")
 NOTION_API_KEY = ENV_VARS.get("NOTION_API_KEY", "")
 NOTION_DATABASE_ID = ENV_VARS.get("NOTION_DATABASE_ID", "")
@@ -53,6 +104,19 @@ INTERACTSH_URL = ENV_VARS.get("INTERACTSH_URL", "")
 NEO4J_URI = ENV_VARS.get("NEO4J_URI", "bolt://neo4j:7687")
 NEO4J_USER = ENV_VARS.get("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = ENV_VARS.get("NEO4J_PASSWORD", "password123")
+
+# IDOR dual-session credentials (optional — configure per target)
+IDOR_CREDENTIALS = None
+try:
+    idor_creds_path = Path("data/idor_credentials.json")
+    if idor_creds_path.exists():
+        IDOR_CREDENTIALS = json.loads(idor_creds_path.read_text(encoding="utf-8"))
+except: pass
+
+# State-Diff engine (persistent across runs)
+STATE_DIFF_ENGINE = None
+if FEATURES_LOADED:
+    STATE_DIFF_ENGINE = StateDiffEngine("data/state_snapshots")
 
 def send_discord_webhook(finding):
     if not DISCORD_WEBHOOK_URL or "your_discord_webhook" in DISCORD_WEBHOOK_URL:
@@ -75,7 +139,7 @@ def send_discord_webhook(finding):
     except: pass
 
 def generate_ai_report(finding):
-    if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return
+    if not GROQ_API_KEY or "your_" in GROQ_API_KEY: return
     if finding.get("severity") not in ["HIGH", "CRITICAL"]: return
     if finding.get("confidence", "LOW") == "LOW": return
     
@@ -90,12 +154,14 @@ def generate_ai_report(finding):
               f"{proof_section}\n\n"
               f"Include: Description, Steps to Reproduce, Impact, and Proof of Concept. "
               f"If automated proof output is provided above, include it as evidence.")
-    model = random.choice(MODELS)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-    payload = {"contents": [{"parts":[{"text": prompt}]}]}
     try:
-        r = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=15)
-        report_text = r.json()['candidates'][0]['content']['parts'][0]['text']
+        from groq import Groq
+        client = Groq(api_key=GROQ_API_KEY)
+        completion = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.1-8b-instant"
+        )
+        report_text = completion.choices[0].message.content
         safe_name = finding.get('type', 'vuln').replace(' ', '_')[:30]
         report_path = REPORTS_DIR / f"report_{safe_name}_{int(time.time())}.md"
         report_path.write_text(report_text, encoding="utf-8")
@@ -104,8 +170,8 @@ def generate_ai_report(finding):
 
 def ai_exploit_and_prove(finding):
     """AI generates a safe PoC exploit, runs it, captures proof for the report."""
-    if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return None
-    if finding.get("severity") not in ["HIGH", "CRITICAL"]: return None
+    if not GROQ_API_KEY or "your_" in GROQ_API_KEY: return None
+    if finding.get("severity") not in ["MEDIUM", "HIGH", "CRITICAL"]: return None
     if finding.get("confidence", "LOW") == "LOW": return None
     
     vuln_type = finding.get("type", "")
@@ -122,13 +188,14 @@ def ai_exploit_and_prove(finding):
               f"5. Be read-only, no destructive actions, complete in under 15 seconds\n\n"
               f"Output ONLY raw Python code. No markdown, no explanation.")
     
-    model = random.choice(MODELS)
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-    payload = {"contents": [{"parts":[{"text": prompt}]}]}
-    
     try:
-        r = requests.post(api_url, json=payload, headers={"Content-Type": "application/json"}, timeout=15)
-        script = r.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+        from groq import Groq
+        client = Groq(api_key=GROQ_API_KEY)
+        completion = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.1-8b-instant"
+        )
+        script = completion.choices[0].message.content.strip()
         
         # Clean markdown
         if script.startswith("```python"): script = script[9:]
@@ -291,14 +358,20 @@ def push_to_graph(finding):
 
 
 def ai_autonomous_exploit(url):
-    if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return None
+    if not GROQ_API_KEY or "your_" in GROQ_API_KEY: return None
     log(f"[*] Autonomous AI analyzing {url} for custom exploits...")
     prompt = f"You are an autonomous AI hacker. Analyze this URL: {url}. Provide exactly 3 highly advanced, context-specific payload strings (separated by newlines) to inject into its parameters for RCE or advanced SQLi. Do not include any explanations, just the raw payloads."
     model = random.choice(MODELS)
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GROQ_API_KEY}"
     payload = {"contents": [{"parts":[{"text": prompt}]}]}
     findings = []
     try:
+        payload["safetySettings"] = [
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"}
+        ]
         r = requests.post(api_url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
         payloads = r.json()['candidates'][0]['content']['parts'][0]['text'].strip().split('\n')
         for p in payloads:
@@ -314,18 +387,20 @@ def ai_autonomous_exploit(url):
 
 
 def generate_nuclei_template(finding):
-    if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return
+    if not GROQ_API_KEY or "your_" in GROQ_API_KEY: return
     if finding.get("type") not in ["AI_AUTONOMOUS_EXPLOIT_SUCCESS", "HIDDEN_API_STATE_CHANGE"]: return
     template_dir = Path("custom-templates")
     template_dir.mkdir(exist_ok=True)
     prompt = f"You are a security engineer writing a Nuclei YAML template.\nBased on this finding:\nType: {finding.get('type')}\nURL: {finding.get('url')}\nDetail: {finding.get('detail')}\n\nWrite a raw Nuclei YAML template. Do NOT use markdown code blocks."
-    model = random.choice(MODELS)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-    payload = {"contents": [{"parts":[{"text": prompt}]}]}
     try:
+        from groq import Groq
         import time
-        r = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
-        yaml_content = r.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+        client = Groq(api_key=GROQ_API_KEY)
+        completion = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.1-8b-instant"
+        )
+        yaml_content = completion.choices[0].message.content.strip()
         if yaml_content.startswith("```yaml"): yaml_content = yaml_content[7:]
         if yaml_content.endswith("```"): yaml_content = yaml_content[:-3]
         yaml_content = yaml_content.strip()
@@ -741,6 +816,26 @@ def scan_target_fast(handle, urls):
             if sho: 
                 log(f"  [+] Shodan found {len(sho)} exposed origin IPs/ports")
                 findings.extend(sho)
+
+            # === Feature 3: State-Diff Engine ===
+            if FEATURES_LOADED and STATE_DIFF_ENGINE:
+                log(f"[*] Running state-diff analysis for {base_domain}...")
+                try:
+                    base_url = f"https://{base_domain}"
+                    sub_domains = [urlparse(u).hostname for u in urls if urlparse(u).hostname]
+                    delta = STATE_DIFF_ENGINE.diff_and_update(
+                        base_domain, base_url=base_url, subdomains=sub_domains
+                    )
+                    # Prioritize new/changed assets
+                    priority_targets = STATE_DIFF_ENGINE.get_priority_scan_targets(delta, base_url)
+                    if priority_targets and not delta.get("is_first_scan"):
+                        log(f"  [+] 🔥 {len(priority_targets)} priority targets from state diff")
+                        for pt in priority_targets:
+                            pt_url = pt["url"]
+                            if pt_url not in urls:
+                                urls.append(pt_url)
+                except Exception as e:
+                    log(f"  [-] State diff error: {e}")
             
     log(f"[*] Final scan scope: {len(urls)} URLs")
     
@@ -761,17 +856,47 @@ def scan_target_fast(handle, urls):
                 b_status = None
                 b_len = None
 
+            # === Original Scan Modules ===
             tasks.append(executor.submit(check_nuclei, b))
             tasks.append(executor.submit(check_ffuf, b))
             tasks.append(executor.submit(check_js_secrets, b))
             tasks.append(executor.submit(check_blind_oob, b))
             tasks.append(executor.submit(check_headless_spa, b))
             tasks.append(executor.submit(ai_autonomous_exploit, b))
-
             tasks.append(executor.submit(check_crlf, b))
             tasks.append(executor.submit(check_host_header, b))
             tasks.append(executor.submit(check_graphql, b))
             tasks.append(executor.submit(check_security_headers, b))
+
+            # === NEW: Awesome Bug Bounty Tools — Full Scanner Suite ===
+            if SCANNERS_LOADED:
+                # Exploitation scanners
+                tasks.append(executor.submit(check_xss, b))
+                tasks.append(executor.submit(check_dom_xss, b))
+                tasks.append(executor.submit(check_ssrf, b))
+                tasks.append(executor.submit(check_ssti, b))
+                tasks.append(executor.submit(check_csrf, b))
+                tasks.append(executor.submit(check_xxe, b))
+                tasks.append(executor.submit(check_command_injection, b))
+                tasks.append(executor.submit(check_directory_traversal, b))
+                tasks.append(executor.submit(check_insecure_deserialization, b))
+                tasks.append(executor.submit(check_request_smuggling, b))
+                tasks.append(executor.submit(check_cache_poisoning, b))
+                tasks.append(executor.submit(check_race_condition, b))
+                # Discovery scanners
+                tasks.append(executor.submit(check_jwt_vulnerabilities, b))
+                tasks.append(executor.submit(check_cms_vulnerabilities, b))
+                tasks.append(executor.submit(check_s3_buckets, b))
+                tasks.append(executor.submit(check_git_exposure, b))
+                tasks.append(executor.submit(check_postmessage, b))
+                tasks.append(executor.submit(check_advanced_secrets, b))
+                tasks.append(executor.submit(check_idor_advanced, b))
+                # Recon scanners
+                tasks.append(executor.submit(detect_waf, b))
+                tasks.append(executor.submit(check_ports, b))
+                tasks.append(executor.submit(check_technologies, b))
+                tasks.append(executor.submit(discover_parameters, b))
+                tasks.append(executor.submit(discover_links_and_js, b))
 
             for path in INTERESTING_PATHS:
                 tasks.append(executor.submit(check_sensitive_single, f"{b}{path}", b_status, b_len))
@@ -799,6 +924,17 @@ def scan_target_fast(handle, urls):
                 tasks.append(executor.submit(check_open_redirect, u))
                 tasks.append(executor.submit(check_lfi, u))
 
+            # === Feature 2: Dual-Session IDOR Detection ===
+            if FEATURES_LOADED and IDOR_CREDENTIALS:
+                # Check if we have credentials for this specific program/domain
+                domain_creds = IDOR_CREDENTIALS.get(handle) or IDOR_CREDENTIALS.get("default")
+                if domain_creds:
+                    tasks.append(executor.submit(check_idor_dual_session, b, handle, domain_creds))
+
+            # === Feature 5: Context-Aware Payload Generation ===
+            if FEATURES_LOADED and GROQ_API_KEY and "your_" not in GROQ_API_KEY:
+                tasks.append(executor.submit(_run_context_payloads, b, handle))
+
         for future in as_completed(tasks):
             res = future.result()
             if res:
@@ -810,8 +946,45 @@ def scan_target_fast(handle, urls):
                     res["program"] = handle
                     findings.append(res)
                     
+    # === Feature 4: WAF Evasion Re-test ===
+    # For any finding that was blocked by WAF, try AI evasion
+    if FEATURES_LOADED and GROQ_API_KEY and "your_" not in GROQ_API_KEY:
+        waf_engine = WAFEvasionEngine(GROQ_API_KEY, max_rounds=2, payloads_per_round=3)
+        waf_retested = []
+        for f in findings:
+            if f.get("waf_blocked"):
+                log(f"  [WAF Evasion] Retesting {f.get('type')} with AI bypass...")
+                result = waf_engine.evade_and_test(
+                    url=f.get("url", ""),
+                    original_payload=f.get("payload", ""),
+                    vuln_type=f.get("type", "XSS"),
+                )
+                if result.get("success"):
+                    f["waf_bypassed"] = True
+                    f["bypass_payload"] = result.get("bypass_payload")
+                    f["confidence"] = "HIGH"
+                    f["detail"] = f"{f.get('detail', '')} [WAF bypassed with AI evasion]"
+                    waf_retested.append(f)
+        if waf_retested:
+            log(f"  [WAF Evasion] {len(waf_retested)} findings recovered after WAF bypass")
+
     log(f"Found {len(findings)} issues for {handle}")
     return findings
+
+
+def _run_context_payloads(base_url, handle):
+    """Feature 5 helper: generate and test context-aware payloads for a base URL."""
+    try:
+        gen = ContextPayloadGenerator(GROQ_API_KEY)
+        payloads = gen.generate_for_target(base_url, max_payloads=10)
+        if payloads:
+            hits = gen.test_payloads(payloads)
+            for h in hits:
+                h["program"] = handle
+            return hits if hits else None
+    except Exception as e:
+        pass
+    return None
 
 def fetch_all_targets():
     """Fetch targets dynamically from HackerOne and Bugcrowd via public repos"""
@@ -895,12 +1068,44 @@ def main():
         
     new_count = 0
     verified_count = 0
+    triaged_count = 0
+    dropped_by_triage = 0
+    valid_findings = []
+    
     for f in all_findings:
         sig = f"{f.get('type')}_{f.get('url')}"
         if sig not in previous_sigs:
             new_count += 1
-            # AI exploit + proof (only for HIGH confidence, HIGH/CRITICAL severity)
-            if f.get("confidence") in ["HIGH", "MEDIUM"] and f.get("severity") in ["HIGH", "CRITICAL"]:
+
+            # === Feature 1: AI Triage (before PoC generation) ===
+            if FEATURES_LOADED and GROQ_API_KEY and "your_" not in GROQ_API_KEY:
+                if f.get("severity") in ["MEDIUM", "HIGH", "CRITICAL"]:
+                    try:
+                        triage = ai_triage_finding(f, GROQ_API_KEY)
+                        triaged_count += 1
+                        f["ai_triage"] = triage
+
+                        if triage.get("verdict") == "FALSE_POSITIVE" and triage.get("confidence", 0) >= 0.7:
+                            log(f"[*] 🗑️ AI Triage: Dropping {f.get('type')} — {triage.get('reasoning', '')[:80]}")
+                            dropped_by_triage += 1
+                            continue
+
+                        # Adjust severity if AI recommends
+                        if triage.get("severity_adjust"):
+                            old_sev = f.get("severity")
+                            f["severity"] = triage["severity_adjust"]
+                            log(f"  [AI Triage] Severity adjusted: {old_sev} → {f['severity']}")
+
+                        # Boost confidence if AI confirms
+                        if triage.get("verdict") == "TRUE_POSITIVE" and triage.get("confidence", 0) >= 0.8:
+                            f["confidence"] = "HIGH"
+                            f["ai_confirmed"] = True
+                    except Exception as e:
+                        pass
+                    time.sleep(0.5)  # Rate limit Gemini calls
+
+            # AI exploit + proof (only for HIGH/MEDIUM confidence, MEDIUM/HIGH/CRITICAL severity)
+            if f.get("confidence") in ["HIGH", "MEDIUM"] and f.get("severity") in ["MEDIUM", "HIGH", "CRITICAL"]:
                 proof = ai_exploit_and_prove(f)
                 if proof and proof.get("verified"):
                     verified_count += 1
@@ -915,9 +1120,14 @@ def main():
             create_notion_ticket(f)
             push_to_graph(f)
             generate_nuclei_template(f)
+            
+            valid_findings.append(f)
+        else:
+            valid_findings.append(f)
 
-    out.write_text(json.dumps(all_findings, indent=2))
-    log(f"Finished! {new_count} NEW, {verified_count} AI-VERIFIED out of {len(all_findings)} total. Saved to {out}")
+    out.write_text(json.dumps(valid_findings, indent=2))
+    log(f"Finished! {new_count} NEW, {verified_count} AI-VERIFIED, {triaged_count} AI-TRIAGED "
+        f"({dropped_by_triage} false positives dropped) out of {len(valid_findings)} total. Saved to {out}")
 
 if __name__ == "__main__":
     main()

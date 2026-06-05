@@ -8,6 +8,7 @@ on:
 jobs:
   recon-and-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -17,8 +18,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install System Dependencies (Go, Git, Curl)
-        run: sudo apt-get update && sudo apt-get install -y golang git wget curl
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y golang git wget curl nmap libpcap-dev
 
       - name: Install Python Dependencies
         run: pip install -r requirements.txt
@@ -34,14 +37,17 @@ jobs:
           NOTION_API_KEY=${{ secrets.NOTION_API_KEY }}
           NOTION_DATABASE_ID=${{ secrets.NOTION_DATABASE_ID }}
           INTERACTSH_URL=${{ secrets.INTERACTSH_URL }}
+          CENSYS_API_ID=${{ secrets.CENSYS_API_ID }}
+          CENSYS_API_SECRET=${{ secrets.CENSYS_API_SECRET }}
           EOF
 
-      - name: Execute Cross-Platform Setup (Downloads Nuclei, FFUF, Subfinder, GAU)
+      - name: Install Full Tool Arsenal
         run: python setup_tools.py
+        timeout-minutes: 15
 
-      - name: Run Autopilot Engine (Dynamic Targets)
+      - name: Run Autopilot Engine (Dynamic Targets — Full Scanner Suite)
         run: python autopilot.py --dynamic
-        timeout-minutes: 45
+        timeout-minutes: 60
 
       - name: Generate HTML Dashboard Report
         if: always()
