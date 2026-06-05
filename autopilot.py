@@ -95,8 +95,8 @@ if Path(".env").exists():
             ENV_VARS[k.strip()] = v.strip()
 
 DISCORD_WEBHOOK_URL = ENV_VARS.get("DISCORD_WEBHOOK_URL", "")
-GROQ_API_KEY = ENV_VARS.get("GROQ_API_KEY", "")
-GROQ_API_KEY = ENV_VARS.get("GROQ_API_KEY", "").strip('"\'')
+GEMINI_API_KEY = ENV_VARS.get("GEMINI_API_KEY", "")
+GEMINI_API_KEY = ENV_VARS.get("GEMINI_API_KEY", "").strip('"\'')
 SHODAN_API_KEY = ENV_VARS.get("SHODAN_API_KEY", "")
 NOTION_API_KEY = ENV_VARS.get("NOTION_API_KEY", "")
 NOTION_DATABASE_ID = ENV_VARS.get("NOTION_DATABASE_ID", "")
@@ -137,9 +137,19 @@ def send_discord_webhook(finding):
     try:
         requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=3)
     except: pass
+def _call_gemini_helper(prompt, api_key):
+    import requests
+    if not api_key or "your_" in api_key: return None
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    payload = {"contents": [{"parts":[{"text": prompt}]}]}
+    try:
+        r = requests.post(api_url, json=payload, headers={"Content-Type": "application/json"}, timeout=15)
+        return r.json()['candidates'][0]['content']['parts'][0]['text']
+    except:
+        return None
 
 def generate_ai_report(finding):
-    if not GROQ_API_KEY or "your_" in GROQ_API_KEY: return
+    if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return
     if finding.get("severity") not in ["HIGH", "CRITICAL"]: return
     if finding.get("confidence", "LOW") == "LOW": return
     
@@ -155,13 +165,8 @@ def generate_ai_report(finding):
               f"Include: Description, Steps to Reproduce, Impact, and Proof of Concept. "
               f"If automated proof output is provided above, include it as evidence.")
     try:
-        from groq import Groq
-        client = Groq(api_key=GROQ_API_KEY)
-        completion = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="llama-3.1-8b-instant"
-        )
-        report_text = completion.choices[0].message.content
+        report_text = _call_gemini_helper(prompt, GEMINI_API_KEY)
+        if not report_text: return
         safe_name = finding.get('type', 'vuln').replace(' ', '_')[:30]
         report_path = REPORTS_DIR / f"report_{safe_name}_{int(time.time())}.md"
         report_path.write_text(report_text, encoding="utf-8")
@@ -170,7 +175,7 @@ def generate_ai_report(finding):
 
 def ai_exploit_and_prove(finding):
     """AI generates a safe PoC exploit, runs it, captures proof for the report."""
-    if not GROQ_API_KEY or "your_" in GROQ_API_KEY: return None
+    if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return None
     if finding.get("severity") not in ["MEDIUM", "HIGH", "CRITICAL"]: return None
     if finding.get("confidence", "LOW") == "LOW": return None
     
@@ -189,13 +194,9 @@ def ai_exploit_and_prove(finding):
               f"Output ONLY raw Python code. No markdown, no explanation.")
     
     try:
-        from groq import Groq
-        client = Groq(api_key=GROQ_API_KEY)
-        completion = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="llama-3.1-8b-instant"
-        )
-        script = completion.choices[0].message.content.strip()
+        script = _call_gemini_helper(prompt, GEMINI_API_KEY)
+        if not script: return None
+        script = script.strip()
         
         # Clean markdown
         if script.startswith("```python"): script = script[9:]
@@ -407,11 +408,11 @@ def push_to_graph(finding):
 
 
 def ai_autonomous_exploit(url):
-    if not GROQ_API_KEY or "your_" in GROQ_API_KEY: return None
+    if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return None
     log(f"[*] Autonomous AI analyzing {url} for custom exploits...")
     prompt = f"You are an autonomous AI hacker. Analyze this URL: {url}. Provide exactly 3 highly advanced, context-specific payload strings (separated by newlines) to inject into its parameters for RCE or advanced SQLi. Do not include any explanations, just the raw payloads."
     model = random.choice(MODELS)
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GROQ_API_KEY}"
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
     payload = {"contents": [{"parts":[{"text": prompt}]}]}
     findings = []
     try:
@@ -436,20 +437,16 @@ def ai_autonomous_exploit(url):
 
 
 def generate_nuclei_template(finding):
-    if not GROQ_API_KEY or "your_" in GROQ_API_KEY: return
+    if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return
     if finding.get("type") not in ["AI_AUTONOMOUS_EXPLOIT_SUCCESS", "HIDDEN_API_STATE_CHANGE"]: return
     template_dir = Path("custom-templates")
     template_dir.mkdir(exist_ok=True)
     prompt = f"You are a security engineer writing a Nuclei YAML template.\nBased on this finding:\nType: {finding.get('type')}\nURL: {finding.get('url')}\nDetail: {finding.get('detail')}\n\nWrite a raw Nuclei YAML template. Do NOT use markdown code blocks."
     try:
-        from groq import Groq
         import time
-        client = Groq(api_key=GROQ_API_KEY)
-        completion = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="llama-3.1-8b-instant"
-        )
-        yaml_content = completion.choices[0].message.content.strip()
+        yaml_content = _call_gemini_helper(prompt, GEMINI_API_KEY)
+        if not yaml_content: return
+        yaml_content = yaml_content.strip()
         if yaml_content.startswith("```yaml"): yaml_content = yaml_content[7:]
         if yaml_content.endswith("```"): yaml_content = yaml_content[:-3]
         yaml_content = yaml_content.strip()
@@ -990,7 +987,7 @@ def scan_target_fast(handle, target_data):
                     tasks.append(executor.submit(check_idor_dual_session, b, handle, domain_creds))
 
             # === Feature 5: Context-Aware Payload Generation ===
-            if FEATURES_LOADED and GROQ_API_KEY and "your_" not in GROQ_API_KEY:
+            if FEATURES_LOADED and GEMINI_API_KEY and "your_" not in GEMINI_API_KEY:
                 tasks.append(executor.submit(_run_context_payloads, b, handle))
 
         for future in as_completed(tasks):
@@ -1006,8 +1003,8 @@ def scan_target_fast(handle, target_data):
                     
     # === Feature 4: WAF Evasion Re-test ===
     # For any finding that was blocked by WAF, try AI evasion
-    if FEATURES_LOADED and GROQ_API_KEY and "your_" not in GROQ_API_KEY:
-        waf_engine = WAFEvasionEngine(GROQ_API_KEY, max_rounds=2, payloads_per_round=3)
+    if FEATURES_LOADED and GEMINI_API_KEY and "your_" not in GEMINI_API_KEY:
+        waf_engine = WAFEvasionEngine(GEMINI_API_KEY, max_rounds=2, payloads_per_round=3)
         waf_retested = []
         for f in findings:
             if f.get("waf_blocked"):
@@ -1033,7 +1030,7 @@ def scan_target_fast(handle, target_data):
 def _run_context_payloads(base_url, handle):
     """Feature 5 helper: generate and test context-aware payloads for a base URL."""
     try:
-        gen = ContextPayloadGenerator(GROQ_API_KEY)
+        gen = ContextPayloadGenerator(GEMINI_API_KEY)
         payloads = gen.generate_for_target(base_url, max_payloads=10)
         if payloads:
             hits = gen.test_payloads(payloads)
@@ -1136,10 +1133,10 @@ def main():
             new_count += 1
 
             # === Feature 1: AI Triage (before PoC generation) ===
-            if FEATURES_LOADED and GROQ_API_KEY and "your_" not in GROQ_API_KEY:
+            if FEATURES_LOADED and GEMINI_API_KEY and "your_" not in GEMINI_API_KEY:
                 if f.get("severity") in ["MEDIUM", "HIGH", "CRITICAL"]:
                     try:
-                        triage = ai_triage_finding(f, GROQ_API_KEY)
+                        triage = ai_triage_finding(f, GEMINI_API_KEY)
                         triaged_count += 1
                         f["ai_triage"] = triage
 
