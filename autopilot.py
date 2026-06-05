@@ -1211,11 +1211,12 @@ def main():
                 log(f"[*] Dropping {f.get('type')} on {f.get('url')} because AI verification failed.")
                 continue
 
-            send_discord_webhook(f)
-            generate_ai_report(f)
-            create_notion_ticket(f)
-            push_to_graph(f)
-            generate_nuclei_template(f)
+            if f.get("severity") in ["MEDIUM", "HIGH", "CRITICAL"]:
+                send_discord_webhook(f)
+                generate_ai_report(f)
+                create_notion_ticket(f)
+                push_to_graph(f)
+                generate_nuclei_template(f)
             
             valid_findings.append(f)
         else:
