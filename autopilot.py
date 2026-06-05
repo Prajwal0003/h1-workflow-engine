@@ -282,6 +282,52 @@ def create_notion_ticket(finding):
 def log(msg):
     print(f"[*] {msg}", flush=True)
 
+class ScopeManager:
+    def __init__(self, data):
+        self.in_scope = []
+        self.out_of_scope = []
+        for s in data.get("scope", {}).get("all", []):
+            asset = s.get("asset_identifier", "").strip().lower()
+            if not asset: continue
+            
+            # Simple wildcard to regex conversion
+            # e.g. *.vimeo.com -> .*\.vimeo\.com
+            escaped = re.escape(asset).replace(r'\*', '.*')
+            pattern = f"^{escaped}$" if '*' not in asset else escaped
+            
+            try:
+                prog = re.compile(pattern)
+            except:
+                continue
+                
+            instruction = s.get("instruction", "").lower()
+            eligible = s.get("eligible_for_submission", True)
+            
+            is_oos = not eligible or "out of scope" in instruction or "do not test" in instruction or "out-of-scope" in instruction or "not accepted" in instruction
+            
+            if is_oos:
+                self.out_of_scope.append(prog)
+            else:
+                self.in_scope.append(prog)
+
+    def is_in_scope(self, url):
+        try:
+            domain = urlparse(url).hostname
+            if not domain: return False
+            domain = domain.lower()
+        except:
+            return False
+            
+        for p in self.out_of_scope:
+            if p.search(domain) or p.search(url.lower()):
+                return False
+                
+        for p in self.in_scope:
+            if p.search(domain) or p.search(url.lower()):
+                return True
+                
+        return False
+
 def load_targets():
     targets = {}
     if not TARGETS_DIR.exists(): return targets
@@ -289,6 +335,7 @@ def load_targets():
         handle = f.stem
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
+            scope_mgr = ScopeManager(data)
             urls = set()
             for s in data.get("scope", {}).get("all", []):
                 atype = s.get("asset_type", "").upper()
@@ -299,7 +346,9 @@ def load_targets():
                     clean = asset.strip().rstrip("/")
                     if not clean.startswith("http"): clean = f"https://{clean}"
                     urls.add(clean)
-            targets[handle] = list(urls)[:50]
+            
+            filtered_urls = [u for u in urls if scope_mgr.is_in_scope(u)]
+            targets[handle] = {"urls": list(filtered_urls)[:50], "scope_mgr": scope_mgr}
         except Exception:
             pass
     return targets
@@ -796,8 +845,9 @@ def check_shodan(domain):
     return findings
 
 # --- Engine ---
-def scan_target_fast(handle, urls):
-    urls = list(urls)
+def scan_target_fast(handle, target_data):
+    urls = list(target_data.get("urls", []))
+    scope_mgr = target_data.get("scope_mgr")
     findings = []  # Initialize BEFORE any use
     log(f"--- Scanning {handle} ({len(urls)} initial URLs) ---")
     if urls:
@@ -806,11 +856,19 @@ def scan_target_fast(handle, urls):
             log(f"[*] Expanding attack surface for {base_domain}...")
             subs = check_subfinder(base_domain)
             if subs: log(f"  [+] Subfinder found {len(subs)} subdomains")
-            urls = list(set(urls + subs))[:100] 
+            urls = list(set(urls + subs))
             
             gu = check_gau(base_domain)
             if gu: log(f"  [+] GAU found {len(gu)} historical URLs")
-            urls = list(set(urls + gu[:50]))
+            urls = list(set(urls + gu))
+            
+            # STRICT SCOPE FILTERING
+            if scope_mgr:
+                pre_filter = len(urls)
+                urls = [u for u in urls if scope_mgr.is_in_scope(u)]
+                log(f"  [+] Scope Enforcement: Dropped {pre_filter - len(urls)} out-of-scope URLs. Kept {len(urls)}.")
+            
+            urls = urls[:100]
             
             sho = check_shodan(base_domain)
             if sho: 
@@ -1063,8 +1121,8 @@ def main():
     previous_sigs = {f"{x.get('type')}_{x.get('url')}" for x in previous_scan}
         
     all_findings = []
-    for handle, urls in targets.items():
-        all_findings.extend(scan_target_fast(handle, urls))
+    for handle, target_data in targets.items():
+        all_findings.extend(scan_target_fast(handle, target_data))
         
     new_count = 0
     verified_count = 0
