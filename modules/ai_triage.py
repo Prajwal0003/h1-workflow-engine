@@ -44,6 +44,20 @@ def _call_gemini(prompt, api_key):
     except:
         return None
 
+def _call_groq(prompt):
+    import requests
+    import os
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key or "your_" in api_key: return None
+    api_url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {"model": "llama3-70b-8192", "messages": [{"role": "user", "content": prompt}], "temperature": 0.1}
+    try:
+        r = requests.post(api_url, json=payload, headers=headers, timeout=15)
+        return r.json()['choices'][0]['message']['content']
+    except:
+        return None
+
 def _replay_request(url, method="GET", headers=None, data=None, timeout=8):
     """Replay the HTTP request and capture the full request/response for AI analysis."""
     try:
@@ -130,7 +144,10 @@ RESPOND IN EXACTLY THIS JSON FORMAT (no markdown, no code blocks):
 
     response = _call_gemini(prompt, api_key)
     if not response:
-        return {"verdict": "NEEDS_REVIEW", "confidence": 0.0, "reasoning": "AI API call failed"}
+        # Failover to GROQ if Gemini is 503/Unavailable
+        response = _call_groq(prompt)
+        if not response:
+            return {"verdict": "NEEDS_REVIEW", "confidence": 0.0, "reasoning": "AI API call failed (Gemini & Groq)"}
 
     # Parse the JSON response from Gemini
     try:

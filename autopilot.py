@@ -156,6 +156,20 @@ def _call_gemini_helper(prompt, api_key):
     except:
         return None
 
+def _call_groq_helper(prompt):
+    import requests
+    import os
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key or "your_" in api_key: return None
+    api_url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {"model": "llama3-70b-8192", "messages": [{"role": "user", "content": prompt}], "temperature": 0.1}
+    try:
+        r = requests.post(api_url, json=payload, headers=headers, timeout=15)
+        return r.json()['choices'][0]['message']['content']
+    except:
+        return None
+
 def generate_ai_report(finding):
     if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return
     if finding.get("severity") not in ["HIGH", "CRITICAL"]: return
@@ -203,6 +217,8 @@ def ai_exploit_and_prove(finding):
     
     try:
         script = _call_gemini_helper(prompt, GEMINI_API_KEY)
+        if not script:
+            script = _call_groq_helper(prompt)
         if not script: return None
         script = script.strip()
         
