@@ -142,44 +142,44 @@ RESPOND IN EXACTLY THIS JSON FORMAT (no markdown, no code blocks):
 {{"verdict": "TRUE_POSITIVE" or "FALSE_POSITIVE" or "NEEDS_REVIEW", "confidence": 0.0 to 1.0, "reasoning": "brief explanation", "severity_adjust": null or "CRITICAL" or "HIGH" or "MEDIUM" or "LOW"}}
 """
 
-    response = _call_gemini(prompt, api_key)
-    if not response:
-        # Failover to GROQ if Gemini is 503/Unavailable
-        response = _call_groq(prompt)
-        if not response:
-            return {"verdict": "NEEDS_REVIEW", "confidence": 0.0, "reasoning": "AI API call failed (Gemini & Groq)"}
+    def _parse(resp):
+        if not resp: return None
+        try:
+            c = resp.strip()
+            if c.startswith("```json"): c = c[7:]
+            if c.startswith("```"): c = c[3:]
+            if c.endswith("```"): c = c[:-3]
+            res = json.loads(c.strip())
+            return res
+        except:
+            if "true positive" in resp.lower(): return {"verdict": "TRUE_POSITIVE", "confidence": 0.3}
+            if "false positive" in resp.lower(): return {"verdict": "FALSE_POSITIVE", "confidence": 0.3}
+            return None
 
-    # Parse the JSON response from Gemini
-    try:
-        # Clean any markdown wrapping
-        cleaned = response.strip()
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        if cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f_gemini = executor.submit(_call_gemini, prompt, api_key)
+        f_groq = executor.submit(_call_groq, prompt)
+        
+        gemini_res = _parse(f_gemini.result())
+        groq_res = _parse(f_groq.result())
 
-        result = json.loads(cleaned)
-        # Validate required keys
-        if "verdict" not in result:
-            result["verdict"] = "NEEDS_REVIEW"
-        if "confidence" not in result:
-            result["confidence"] = 0.5
-        if "reasoning" not in result:
-            result["reasoning"] = "AI analysis completed"
-        if "severity_adjust" not in result:
-            result["severity_adjust"] = None
-        return result
-    except json.JSONDecodeError:
-        # Try to extract verdict from freeform text
-        verdict = "NEEDS_REVIEW"
-        if "true positive" in response.lower():
-            verdict = "TRUE_POSITIVE"
-        elif "false positive" in response.lower():
-            verdict = "FALSE_POSITIVE"
-        return {"verdict": verdict, "confidence": 0.3, "reasoning": response[:200], "severity_adjust": None}
+    if not gemini_res and not groq_res:
+        return {"verdict": "NEEDS_REVIEW", "confidence": 0.0, "reasoning": "Both AI APIs failed"}
+
+    # If only one succeeded, trust it
+    if gemini_res and not groq_res: return gemini_res
+    if groq_res and not gemini_res: return groq_res
+
+    # Consensus logic: If EITHER AI says FALSE_POSITIVE, we drop it (Strict Zero-Trust)
+    if gemini_res.get("verdict") == "FALSE_POSITIVE" or groq_res.get("verdict") == "FALSE_POSITIVE":
+        return {"verdict": "FALSE_POSITIVE", "confidence": max(gemini_res.get("confidence", 0), groq_res.get("confidence", 0)), "reasoning": f"Gemini: {gemini_res.get('verdict')}, Groq: {groq_res.get('verdict')} - Strict Block"}
+    
+    # If both agree it's TRUE_POSITIVE
+    if gemini_res.get("verdict") == "TRUE_POSITIVE" and groq_res.get("verdict") == "TRUE_POSITIVE":
+        return gemini_res
+        
+    return {"verdict": "NEEDS_REVIEW", "confidence": 0.5, "reasoning": f"No consensus: Gemini={gemini_res.get('verdict')}, Groq={groq_res.get('verdict')}"}
 
 
 def batch_triage(findings, api_key, severity_filter=None, max_findings=20):
