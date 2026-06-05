@@ -1063,7 +1063,7 @@ def fetch_all_targets():
                     if not clean.startswith("http"): clean = f"https://{clean}"
                     urls.append(clean)
             if urls:
-                all_targets[handle] = urls[:50] # Top 50 scope items
+                all_targets[handle] = {"urls": urls[:50], "scope_mgr": None}
     except Exception as e: log(f"[-] Failed to fetch H1 targets: {e}")
         
     # 2. Bugcrowd
@@ -1082,7 +1082,7 @@ def fetch_all_targets():
                     if not clean.startswith("http"): clean = f"https://{clean}"
                     urls.append(clean)
             if urls:
-                all_targets[f"bugcrowd_{handle}"] = urls[:50]
+                all_targets[f"bugcrowd_{handle}"] = {"urls": urls[:50], "scope_mgr": None}
     except Exception as e: log(f"[-] Failed to fetch Bugcrowd targets: {e}")
     
     log(f"[+] Loaded {len(all_targets)} bug bounty programs paying bounties")
