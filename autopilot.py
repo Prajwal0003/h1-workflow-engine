@@ -1167,6 +1167,7 @@ def main():
     triaged_count = 0
     dropped_by_triage = 0
     valid_findings = []
+    needs_review_findings = []
     
     for f in all_findings:
         sig = f"{f.get('type')}_{f.get('url')}"
@@ -1214,6 +1215,7 @@ def main():
                 
                 if f.get("verified") is not True and triage_verdict != "TRUE_POSITIVE":
                     log(f"[*] 🛡️ STRICT AI FILTER: Dropping unverified {f.get('type')} on {f.get('url')} to prevent false positives.")
+                    needs_review_findings.append(f)
                     continue
                 
                 # If it survived the strict filter, it is a HIGH-CONFIDENCE REAL BUG!
@@ -1228,6 +1230,12 @@ def main():
             valid_findings.append(f)
 
     out.write_text(json.dumps(valid_findings, indent=2))
+    
+    if needs_review_findings:
+        review_out = RESULTS_DIR / "needs_review.json"
+        review_out.write_text(json.dumps(needs_review_findings, indent=2))
+        log(f"[*] Saved {len(needs_review_findings)} unverified findings to {review_out} for manual review.")
+        
     log(f"Finished! {new_count} NEW, {verified_count} AI-VERIFIED, {triaged_count} AI-TRIAGED "
         f"({dropped_by_triage} false positives dropped) out of {len(valid_findings)} total. Saved to {out}")
 
