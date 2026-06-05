@@ -1096,11 +1096,41 @@ def main():
 
     if args.dynamic:
         targets = fetch_all_targets()
-        # Randomly select 10 programs to scan in this run to avoid infinite execution
         import random
-        keys = random.sample(list(targets.keys()), min(10, len(targets)))
-        targets = {k: targets[k] for k in keys}
-        log(f"[*] Dynamically selected {len(targets)} random bounty programs for this cycle")
+        
+        # New Program Tracking
+        known_programs_file = DATA_DIR / "known_programs.json"
+        known_programs = set()
+        if known_programs_file.exists():
+            try: known_programs = set(json.loads(known_programs_file.read_text()))
+            except: pass
+            
+        current_programs = set(targets.keys())
+        new_programs = current_programs - known_programs
+        
+        if new_programs:
+            log(f"[*] 🚨 FOUND {len(new_programs)} NEW BUG BOUNTY PROGRAMS 🚨")
+            for np in new_programs:
+                send_discord(f"🚨 **NEW BUG BOUNTY PROGRAM DETECTED** 🚨\nProgram: `{np}`\nPrioritizing full reconnaissance immediately to get first-blood!")
+            
+            # Save updated known list
+            known_programs_file.write_text(json.dumps(list(current_programs)))
+            
+            # Force the new programs into the scan list
+            keys_to_scan = list(new_programs)
+            # Fill the rest of the 10 slots with random old programs
+            if len(keys_to_scan) < 10:
+                remaining_slots = 10 - len(keys_to_scan)
+                old_programs = list(current_programs - new_programs)
+                keys_to_scan.extend(random.sample(old_programs, min(remaining_slots, len(old_programs))))
+        else:
+            # Save updated known list for the very first run
+            known_programs_file.write_text(json.dumps(list(current_programs)))
+            # Randomly select 10 programs
+            keys_to_scan = random.sample(list(targets.keys()), min(10, len(targets)))
+            
+        targets = {k: targets[k] for k in keys_to_scan}
+        log(f"[*] Dynamically selected {len(targets)} bounty programs for this cycle")
     else:
         targets = load_targets()
         
