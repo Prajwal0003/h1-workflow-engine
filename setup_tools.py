@@ -417,23 +417,20 @@ def install_awesome_bugbounty_tools_mass():
 
         print(f"[*] Found {len(unique_repos)} potential tools to clone!")
 
-        # Clone up to 100 tools to avoid timeout limits, skipping the main list repo itself
+        # Clone all tools (no limit)
         count = 0
         for owner, repo in unique_repos:
-            if count >= 100:
-                print("[*] Reached mass clone limit of 100 tools.")
-                break
             if repo.lower() == "awesome-bugbounty-tools":
                 continue
 
             repo_url = f"https://github.com/{owner}/{repo}.git"
             dest = mass_dir / repo
             if not dest.exists():
-                print(f"[*] Mass cloning {repo}...")
+                print(f"[*] Mass cloning {repo} ({count+1}/{len(unique_repos)})...")
                 subprocess.run(["git", "clone", "--depth", "1", repo_url, str(dest)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             count += 1
 
-        print("[+] Mass clone complete!")
+        print(f"[+] Mass clone complete! Downloaded {count} tools.")
     except Exception as e:
         print(f"[-] Failed mass clone: {e}")
 
