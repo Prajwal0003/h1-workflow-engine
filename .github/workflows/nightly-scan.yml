@@ -3,7 +3,12 @@ name: Bug Bounty Scan
 on:
   schedule:
     - cron: '0 * * * *' # Run every hour automatically
-  workflow_dispatch: # Allow manual triggering from the GitHub Actions tab
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Specific target handle (e.g. netscaler). Leave blank for random dynamic scan.'
+        required: false
+        default: ''
 
 concurrency:
   group: scanner-workflow
@@ -51,7 +56,12 @@ jobs:
         timeout-minutes: 45
 
       - name: Run Autopilot Engine (Dynamic Targets — Full Scanner Suite)
-        run: python autopilot.py --dynamic
+        run: |
+          if [ -n "${{ github.event.inputs.target }}" ]; then
+            python autopilot.py ${{ github.event.inputs.target }} --dynamic
+          else
+            python autopilot.py --dynamic
+          fi
         timeout-minutes: 60
 
       - name: Generate HTML Dashboard Report

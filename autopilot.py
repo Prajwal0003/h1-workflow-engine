@@ -1094,7 +1094,24 @@ def main():
     parser.add_argument("--dynamic", action="store_true", help="Dynamically fetch fresh targets")
     args = parser.parse_args()
 
-    if args.dynamic:
+    if args.target:
+        if args.dynamic:
+            all_t = fetch_all_targets()
+            if args.target in all_t:
+                targets = {args.target: all_t[args.target]}
+                log(f"[*] Forced manual dynamic scan on target: {args.target}")
+            else:
+                log(f"[-] Target {args.target} not found in dynamic HackerOne/Bugcrowd dataset.")
+                return
+        else:
+            all_t = load_targets()
+            if args.target in all_t:
+                targets = {args.target: all_t[args.target]}
+                log(f"[*] Forced manual local scan on target: {args.target}")
+            else:
+                log(f"[-] Target {args.target} not found in local data/selected_targets/")
+                return
+    elif args.dynamic:
         targets = fetch_all_targets()
         import random
         
@@ -1133,12 +1150,6 @@ def main():
         log(f"[*] Dynamically selected {len(targets)} bounty programs for this cycle")
     else:
         targets = load_targets()
-        
-    if args.target:
-        if args.target not in targets:
-            log("Target not found")
-            return
-        targets = {args.target: targets[args.target]}
         
     out = RESULTS_DIR / "latest_fast_scan.json"
     previous_scan = []
