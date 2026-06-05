@@ -29,6 +29,10 @@ from .command_injection import check_command_injection
 from .idor_advanced import check_idor_advanced
 from .api_versioning import check_api_versioning
 from .rate_limit import check_rate_limit
+from .js_analyzer import check_js_analyzer
+from .api_schema import check_api_schema
+from .mass_assignment import check_mass_assignment
+from .cache_deception import check_cache_deception
 
 __all__ = [
     "check_xss", "check_dom_xss", "check_ssrf", "check_ssti", "check_csrf",
@@ -39,4 +43,5 @@ __all__ = [
     "discover_links_and_js", "check_advanced_secrets", "check_insecure_deserialization",
     "check_postmessage", "generate_permutations", "check_command_injection",
     "check_idor_advanced", "check_api_versioning", "check_rate_limit",
+    "check_js_analyzer", "check_api_schema", "check_mass_assignment", "check_cache_deception"
 ]

@@ -13,12 +13,25 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:91.0) Gecko/20100101 Firefox/91.0",
 ]
 
+GLOBAL_COOKIE = None
+GLOBAL_BEARER = None
+
+def set_auth_context(cookie=None, bearer=None):
+    global GLOBAL_COOKIE, GLOBAL_BEARER
+    GLOBAL_COOKIE = cookie
+    GLOBAL_BEARER = bearer
+
 def stealth_headers():
-    return {
+    headers = {
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "*/*",
         "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}"
     }
+    if GLOBAL_COOKIE:
+        headers["Cookie"] = GLOBAL_COOKIE
+    if GLOBAL_BEARER:
+        headers["Authorization"] = f"Bearer {GLOBAL_BEARER}"
+    return headers
 
 def safe_get(url, timeout=5, **kwargs):
     try:

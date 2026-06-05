@@ -4,12 +4,13 @@ Rate Limit Scanner — Checks for lack of rate limiting on sensitive endpoints.
 from urllib.parse import urlparse
 import requests
 import concurrent.futures
-from .utils import get_stealth_headers
+from .utils import stealth_headers
+import time
 
 AUTH_ENDPOINTS = [
     "/login", "/api/login", "/api/auth", "/auth", "/signin", "/api/signin",
     "/forgot-password", "/reset-password", "/api/forgot-password", "/register",
-    "/api/register", "/graphql"
+    "/api/register", "/graphql", "/otp/verify", "/2fa/verify"
 ]
 
 def check_rate_limit(url):
@@ -22,25 +23,31 @@ def check_rate_limit(url):
         
         # Check if endpoint actually exists
         try:
-            r = requests.get(target, headers=get_stealth_headers(), timeout=5, verify=False, allow_redirects=False)
+            r = requests.get(target, headers=stealth_headers(), timeout=5, verify=False, allow_redirects=False)
             if r.status_code in [404, 403, 301, 302]:
                 continue
         except Exception:
             continue
 
-        # Endpoint exists, send 15 rapid requests
+        # Endpoint exists, send 10 cautious requests
         responses = []
-        def fire_req():
+        retry_after_seen = False
+        
+        for _ in range(10):
             try:
-                return requests.post(target, headers=get_stealth_headers(), data={"email":"test@example.com", "password":"test"}, timeout=5, verify=False).status_code
+                r_post = requests.post(target, headers=stealth_headers(), data={"email":"test@example.com", "password":"test"}, timeout=5, verify=False)
+                responses.append(r_post.status_code)
+                
+                if r_post.status_code == 429:
+                    if "Retry-After" in r_post.headers:
+                        retry_after_seen = True
+                    break
+                    
+                time.sleep(0.5) # Caution delay
             except:
-                return 0
+                responses.append(0)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(fire_req) for _ in range(15)]
-            responses = [f.result() for f in futures]
-
-        # If all 15 succeeded (200 OK or 401 Unauthorized, meaning logic was executed)
+        # If all 10 succeeded (200 OK or 401 Unauthorized, meaning logic was executed)
         # and NONE were 429 Too Many Requests or 403 Forbidden (WAF block)
         if all(code in [200, 401, 400] for code in responses) and 429 not in responses and 403 not in responses:
             findings.append({

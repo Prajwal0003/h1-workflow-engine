@@ -47,6 +47,10 @@ try:
     from scanners.idor_advanced import check_idor_advanced
     from scanners.api_versioning import check_api_versioning
     from scanners.rate_limit import check_rate_limit
+    from scanners.js_analyzer import check_js_analyzer
+    from scanners.api_schema import check_api_schema
+    from scanners.mass_assignment import check_mass_assignment
+    from scanners.cache_deception import check_cache_deception
     SCANNERS_LOADED = True
 except ImportError as e:
     print(f"[!] Some scanner modules not loaded: {e}")
@@ -619,60 +623,68 @@ def check_security_headers(url):
     except Exception: pass
     return None
 
-def check_cors(url):
+def check_cors(base_url):
+    CORS_PATHS = ['', '/api/user', '/api/profile', '/api/me', '/account', '/user/settings', '/api/v1/user', '/dashboard']
     try:
-        def test_origin(origin_val):
+        def test_origin(url, origin_val):
             h = {**get_stealth_headers(), "Origin": origin_val}
             r = requests.get(url, headers=h, timeout=3, verify=False, allow_redirects=False)
             return r
 
-        r1 = test_origin("https://evil.com")
-        acao1 = r1.headers.get("Access-Control-Allow-Origin", "")
-        
-        # Test null origin
-        r_null = test_origin("null")
-        acao_null = r_null.headers.get("Access-Control-Allow-Origin", "")
-        
-        if acao1 != "https://evil.com" and acao_null != "null":
-            return None
+        for path in CORS_PATHS:
+            url = f"{base_url.rstrip('/')}{path}"
+            r1 = test_origin(url, "https://evil.com")
+            acao1 = r1.headers.get("Access-Control-Allow-Origin", "")
             
-        r2 = test_origin(f"https://attacker-{random.randint(1000,9999)}.com")
-        acao2 = r2.headers.get("Access-Control-Allow-Origin", "")
-        
-        is_vuln = False
-        origin_type = ""
-        if acao1 == "https://evil.com" and acao2.startswith("https://attacker-"):
-            is_vuln = True
-            origin_type = "arbitrary origins"
-            r_vuln = r2
-        elif acao_null == "null":
-            is_vuln = True
-            origin_type = "null origin"
-            r_vuln = r_null
+            # Test null origin
+            r_null = test_origin(url, "null")
+            acao_null = r_null.headers.get("Access-Control-Allow-Origin", "")
             
-        if not is_vuln:
-            return None
+            if acao1 != "https://evil.com" and acao_null != "null":
+                continue
+                
+            r2 = test_origin(url, f"https://attacker-{random.randint(1000,9999)}.com")
+            acao2 = r2.headers.get("Access-Control-Allow-Origin", "")
+            
+            is_vuln = False
+            origin_type = ""
+            if acao1 == "https://evil.com" and acao2.startswith("https://attacker-"):
+                is_vuln = True
+                origin_type = "arbitrary origins"
+                r_vuln = r2
+            elif acao_null == "null":
+                is_vuln = True
+                origin_type = "null origin"
+                r_vuln = r_null
+                
+            if not is_vuln:
+                continue
 
-        acac = r_vuln.headers.get("Access-Control-Allow-Credentials", "").lower() == "true"
-        expose = r_vuln.headers.get("Access-Control-Expose-Headers", "").lower()
-        
-        sensitive_headers = ["authorization", "x-auth-token", "set-cookie", "x-user-id"]
-        exposed_sensitive = [h for h in sensitive_headers if h in expose]
+            acac = r_vuln.headers.get("Access-Control-Allow-Credentials", "").lower() == "true"
+            expose = r_vuln.headers.get("Access-Control-Expose-Headers", "").lower()
+            
+            sensitive_headers = ["authorization", "x-auth-token", "set-cookie", "x-user-id"]
+            exposed_sensitive = [h for h in sensitive_headers if h in expose]
 
-        # Ensure response has body and is not a 404/error page
-        if len(r_vuln.text) < 10 or r_vuln.status_code >= 400:
-            return None
+            # Ensure response has body and is not a 404/error page
+            if len(r_vuln.text) < 10 or r_vuln.status_code >= 400:
+                continue
 
-        if exposed_sensitive and acac:
-            return {"type": "CORS_REFLECTION", "url": url, "severity": "CRITICAL", "confidence": "HIGH",
-                    "detail": f"Reflects {origin_type} + Credentials + Exposes {', '.join(exposed_sensitive)}"}
-        elif acac:
-            return {"type": "CORS_REFLECTION", "url": url, "severity": "HIGH", "confidence": "HIGH",
-                    "detail": f"Reflects {origin_type} + allows Credentials"}
-        else:
-            return {"type": "CORS_REFLECTION", "url": url, "severity": "MEDIUM", "confidence": "MEDIUM",
-                    "detail": f"Reflects {origin_type} but NO credentials"}
+            # Deep paths are more likely to return PII, so they carry higher severity if credentials are allowed
+            is_deep_path = path != ''
+            
+            if exposed_sensitive and acac:
+                return {"type": "CORS_REFLECTION", "url": url, "severity": "CRITICAL", "confidence": "HIGH",
+                        "duplicate_risk": "HIGH", "detail": f"Reflects {origin_type} + Credentials + Exposes {', '.join(exposed_sensitive)} on deep path {path}" if is_deep_path else f"Reflects {origin_type} + Credentials + Exposes {', '.join(exposed_sensitive)}"}
+            elif acac:
+                severity = "CRITICAL" if is_deep_path else "HIGH"
+                return {"type": "CORS_REFLECTION", "url": url, "severity": severity, "confidence": "HIGH",
+                        "duplicate_risk": "VERY HIGH", "detail": f"Reflects {origin_type} + allows Credentials on path {path}"}
+            elif not is_deep_path:
+                return {"type": "CORS_REFLECTION", "url": url, "severity": "LOW", "confidence": "MEDIUM",
+                        "duplicate_risk": "VERY HIGH", "detail": f"Reflects {origin_type} but NO credentials"}
     except Exception: pass
+    return None
 
 def check_takeover(url):
     try:
@@ -692,13 +704,20 @@ def check_takeover(url):
             if cname_target:  # Dangling CNAME = real takeover candidate
                 # Verify CNAME target is actually resolvable to a takeover service
                 # We will only flag HIGH if the CNAME contains known provider strings (aws, heroku, github, etc)
-                known_providers = ["s3", "amazonaws", "herokuapp", "github.io", "wpengine", "surge.sh", "azure", "trafficmanager", "cloudflare", "fastly"]
-                if any(p in cname_target.lower() for p in known_providers):
+                CLAIMABLE_SERVICES = ['github.io', 's3.amazonaws.com', 'herokuapp.com', 'netlify.app', 'pages.dev', 'azurewebsites.net', 'wpengine', 'surge.sh']
+                NOT_CLAIMABLE = ['elb.amazonaws.com', 'cloudfront.net', 'awsdns']
+                
+                cname_lower = cname_target.lower()
+                
+                if any(nc in cname_lower for nc in NOT_CLAIMABLE):
+                    return None # Unclaimable AWS managed service
+                    
+                if any(p in cname_lower for p in CLAIMABLE_SERVICES):
                     return {"type": "SUBDOMAIN_TAKEOVER", "url": url, "severity": "HIGH", "confidence": "HIGH",
-                            "detail": f"NXDOMAIN + dangling CNAME → {cname_target}"}
+                            "duplicate_risk": "HIGH", "detail": f"NXDOMAIN + dangling CNAME → {cname_target} (Claimable service)"}
                 else:
-                    return {"type": "SUBDOMAIN_TAKEOVER", "url": url, "severity": "MEDIUM", "confidence": "MEDIUM",
-                            "detail": f"NXDOMAIN + generic dangling CNAME → {cname_target}"}
+                    return {"type": "SUBDOMAIN_TAKEOVER", "url": url, "severity": "LOW", "confidence": "LOW",
+                            "requires_manual_verification": True, "detail": f"NXDOMAIN + generic dangling CNAME → {cname_target} (Unknown if claimable)"}
             return None  # NXDOMAIN without CNAME = just unconfigured, not exploitable
         # Step 3: Even if DNS resolves, check HTTP for takeover fingerprints
         try:
@@ -1028,6 +1047,10 @@ def scan_target_fast(handle, target_data):
                 # Exploitation scanners
                 tasks.append(executor.submit(check_api_versioning, b))
                 tasks.append(executor.submit(check_rate_limit, b))
+                tasks.append(executor.submit(check_js_analyzer, b))
+                tasks.append(executor.submit(check_api_schema, b))
+                tasks.append(executor.submit(check_mass_assignment, b))
+                tasks.append(executor.submit(check_cache_deception, b))
                 tasks.append(executor.submit(check_xss, b))
                 tasks.append(executor.submit(check_dom_xss, b))
                 tasks.append(executor.submit(check_ssrf, b))
@@ -1406,4 +1429,20 @@ def main():
         f"({dropped_by_triage} false positives dropped). Saved to {RESULTS_DIR}")
 
 if __name__ == "__main__":
+    import argparse
+    from scanners.utils import set_auth_context
+    
+    parser = argparse.ArgumentParser(description="Aegis-Auto Bug Bounty Platform")
+    parser.add_argument("--dynamic", action="store_true", help="Dynamically select targets")
+    parser.add_argument("--cookie", type=str, help="Session cookie for authenticated scanning")
+    parser.add_argument("--bearer", type=str, help="Bearer token for authenticated scanning")
+    
+    args, unknown = parser.parse_known_args()
+    
+    if args.cookie or args.bearer:
+        set_auth_context(cookie=args.cookie, bearer=args.bearer)
+        print(f"[*] Authenticated Scan Mode ENABLED.")
+        if args.cookie: print(f"    - Cookie injected")
+        if args.bearer: print(f"    - Bearer injected")
+        
     main()

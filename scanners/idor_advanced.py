@@ -69,12 +69,37 @@ def check_idor_advanced(url):
                 findings.append({
                     "type": "IDOR",
                     "url": target1,
-                    "severity": "MEDIUM",  # Start medium, flag for review
+                    "severity": "HIGH",
                     "confidence": "MEDIUM",
                     "duplicate_risk": "LOW",
                     "requires_manual_verification": True,
-                    "detail": f"Potential IDOR: Valid distinct responses for ID={test_id} and ID={test_id+1} ({diff_bytes} byte diff). Needs manual review!"
+                    "detail": f"Potential URL IDOR: Valid distinct responses for ID={test_id} and ID={test_id+1} ({diff_bytes} byte diff)."
                 })
                 break  # One IDOR per endpoint template is enough
+
+            # === HEADER IDOR TEST ===
+            # Also test header-based IDOR on the SAME endpoint
+            h1 = {**stealth_headers(), "X-User-ID": str(test_id), "X-Account-ID": str(test_id)}
+            h2 = {**stealth_headers(), "X-User-ID": str(test_id+1), "X-Account-ID": str(test_id+1)}
+            
+            try:
+                import requests
+                rh1 = requests.get(target1, headers=h1, timeout=5, verify=False, allow_redirects=False)
+                rh2 = requests.get(target1, headers=h2, timeout=5, verify=False, allow_redirects=False)
+                
+                if rh1.status_code == 200 and rh2.status_code == 200:
+                    diff_h = abs(len(rh1.text) - len(rh2.text))
+                    if diff_h > 20 and diff_h != diff_bytes:
+                        findings.append({
+                            "type": "IDOR_HEADER",
+                            "url": target1,
+                            "severity": "HIGH",
+                            "confidence": "MEDIUM",
+                            "duplicate_risk": "LOW",
+                            "requires_manual_verification": True,
+                            "detail": f"Potential Header IDOR (X-User-ID): Response changes based on injected headers."
+                        })
+            except:
+                pass
 
     return findings if findings else None
