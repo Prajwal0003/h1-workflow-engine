@@ -450,9 +450,6 @@ def push_to_graph(finding):
         return prior_reports
     except Exception as e:
         return 0
-            session.run(query, program=program, domain=domain, v_type=v_type, url=url, severity=severity)
-        driver.close()
-    except Exception as e: pass
 
 
 def ai_autonomous_exploit(url):
