@@ -39,6 +39,7 @@ jobs:
           INTERACTSH_URL=${{ secrets.INTERACTSH_URL }}
           CENSYS_API_ID=${{ secrets.CENSYS_API_ID }}
           CENSYS_API_SECRET=${{ secrets.CENSYS_API_SECRET }}
+          GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
           EOF
 
       - name: Install Full Tool Arsenal
