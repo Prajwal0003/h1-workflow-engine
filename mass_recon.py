@@ -93,6 +93,31 @@ for handle in TARGETS:
     cors_vulns = [r for r in results if "Wildcard CORS" in r.get("issues", [])]
     
     print(f"    -> Live targets (2xx/3xx): {len(live)}")
+    
+    # -- State Tracking / Diffing Logic --
+    state_file = config.TARGETS_DIR / f"{handle}_known_live.json"
+    known_live_urls = set()
+    if state_file.exists():
+        try:
+            known_live_urls = set(json.loads(state_file.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+            
+    current_live_urls = set(r["url"] for r in live)
+    new_assets = current_live_urls - known_live_urls
+    
+    if new_assets:
+        print(f"    [***] FOUND {len(new_assets)} NEW ASSETS SINCE LAST RUN! [***]")
+        for na in new_assets:
+            print(f"        - {na}")
+            # You can trigger your deep scans (Nuclei, Fuzzing) here for 'na'
+        
+        # Update the state file with the new complete list
+        state_file.write_text(json.dumps(list(current_live_urls), indent=2), encoding="utf-8")
+    else:
+        print("    [-] No new live assets discovered. Skipping deep scans.")
+    # ------------------------------------
+
     print(f"    -> Potential Takeovers (404/503/Timeout/Conn_err): {len(takeovers)}")
     
     if cors_vulns:

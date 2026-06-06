@@ -3,6 +3,8 @@ Port Scanner — Wrapper around naabu for fast port scanning.
 Ref: awesome-bugbounty-tools (naabu, masscan, RustScan, nmap).
 """
 import json
+import os
+from pathlib import Path
 from urllib.parse import urlparse
 from .utils import run_bin
 
@@ -102,4 +104,29 @@ def check_ports(url):
             except Exception:
                 pass
 
-    return findings if findings else None
+    # --- State Tracking & Diffing Logic ---
+    state_file = Path("data") / f"port_state_{hostname}.json"
+    known_ports = set()
+    if state_file.exists():
+        try:
+            known_ports = set(json.loads(state_file.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+            
+    current_ports = set()
+    new_findings = []
+    
+    for finding in findings:
+        try:
+            port = finding["url"].split(":")[-1]
+            current_ports.add(port)
+            if port not in known_ports:
+                new_findings.append(finding)
+        except Exception:
+            new_findings.append(finding) # Fallback
+
+    if current_ports:
+        os.makedirs("data", exist_ok=True)
+        state_file.write_text(json.dumps(list(current_ports), indent=2), encoding="utf-8")
+
+    return new_findings if new_findings else None
