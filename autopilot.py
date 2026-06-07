@@ -53,6 +53,21 @@ try:
     from scanners.cache_deception import check_cache_deception
     from scanners.dorking import run_dorking
     from scanners.graphql_parser import check_graphql
+    
+    # Dynamically load AI-generated custom tools
+    import importlib
+    import pkgutil
+    import scanners.custom_tools
+    CUSTOM_SCANNERS = []
+    for _, module_name, _ in pkgutil.iter_modules(scanners.custom_tools.__path__):
+        try:
+            mod = importlib.import_module(f"scanners.custom_tools.{module_name}")
+            for attr in dir(mod):
+                if attr.startswith("run_"):
+                    CUSTOM_SCANNERS.append(getattr(mod, attr))
+        except Exception as e:
+            print(f"[!] Failed to load custom tool {module_name}: {e}")
+            
     SCANNERS_LOADED = True
 except ImportError as e:
     print(f"[!] Some scanner modules not loaded: {e}")
@@ -1055,6 +1070,10 @@ def scan_target_fast(handle, target_data):
                 tasks.append(executor.submit(check_cache_deception, b))
                 tasks.append(executor.submit(run_dorking, b))
                 tasks.append(executor.submit(check_graphql, b))
+                
+                # Execute dynamically generated custom AI tools
+                for custom_scanner in CUSTOM_SCANNERS:
+                    tasks.append(executor.submit(custom_scanner, b))
                 tasks.append(executor.submit(check_xss, b))
                 tasks.append(executor.submit(check_dom_xss, b))
                 tasks.append(executor.submit(check_ssrf, b))

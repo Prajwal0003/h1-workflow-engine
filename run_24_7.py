@@ -37,6 +37,13 @@ def run_zero_day_watcher():
     except Exception as e:
         logging.error(f"Zero-Day Watcher encountered an error: {e}")
 
+def run_tool_updater():
+    logging.info("Checking GitHub for newly released Bug Bounty tools...")
+    try:
+        subprocess.run(["python", "-m", "modules.tool_updater"], check=True, capture_output=True, text=True)
+    except Exception as e:
+        logging.error(f"Tool Updater encountered an error: {e}")
+
 if __name__ == "__main__":
     sso_emails = None
     sso_passes = None
@@ -51,6 +58,7 @@ if __name__ == "__main__":
     logging.info(f"Starting Daemon. SSO Emails configured: {'Yes' if sso_emails else 'No'}")
         
     while True:
+        run_tool_updater()
         run_zero_day_watcher()
         run_autopilot(sso_emails, sso_passes)
         
