@@ -20,10 +20,10 @@ def run_mantis_scan(target_dir):
         console.print("[dim]Mantishack requires local source code to perform static analysis.[/dim]")
         return False
         
-    mantis_script = Path("ext/mantishack/mantishack.py").absolute()
+    mantis_script = Path("scanners/mantishack_features/mantishack.py").absolute()
     
     if not mantis_script.exists():
-        console.print("[red]✗ Mantishack repository not found in ext/mantishack[/red]")
+        console.print("[red]✗ Mantishack repository not found in scanners/mantishack_features[/red]")
         console.print("[dim]Please ensure the repository was cloned correctly.[/dim]")
         return False
         

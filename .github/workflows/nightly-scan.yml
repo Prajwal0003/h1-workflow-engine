@@ -56,9 +56,11 @@ jobs:
         timeout-minutes: 45
 
       - name: Run Autopilot Engine (Dynamic Targets — Full Scanner Suite)
+        env:
+          TARGET: ${{ github.event.inputs.target }}
         run: |
-          if [ -n "${{ github.event.inputs.target }}" ]; then
-            python autopilot.py ${{ github.event.inputs.target }} --dynamic
+          if [ -n "$TARGET" ]; then
+            python autopilot.py "$TARGET" --dynamic
           else
             python autopilot.py --dynamic
           fi

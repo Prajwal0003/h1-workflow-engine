@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "combined_sarif": {
+    "path": "combined.sarif",
+    "sha256": "b63d056307ee1600eaf0e8d4f1475d83867bb5485c7fe4a048e22da82f60ad72",
+    "size_bytes": 2128120
+  },
+  "packs": [
+    {
+      "tool": "semgrep",
+      "name": "category_auth",
+      "exit": 7,
+      "findings": 0,
+      "sarif_sha256": "16fc01a51bae7ff171cb18d797fc3e9d0492daf0471cf89778ce08d634e3bbb6",
+      "stderr_size_bytes": 0
+    },
+    {
+      "tool": "semgrep",
+      "name": "semgrep_auth",
+      "exit": 0,
+      "findings": 0,
+      "sarif_sha256": "341da6b223087969fb08bc82c4247cfd52718853cb74d2d7ab8699c19026f40c",
+      "stderr_size_bytes": 0
+    },
+    {
+      "tool": "semgrep",
+      "name": "semgrep_security_audit",
+      "exit": 1,
+      "findings": 83,
+      "sarif_sha256": "84a8dda62ce80a62d8e00b679a2fa9fd2472fd57f37b2f90175364d974249ae3",
+      "stderr_size_bytes": 0
+    },
+    {
+      "tool": "semgrep",
+      "name": "semgrep_secrets",
+      "exit": 1,
+      "findings": 4,
+      "sarif_sha256": "c240abc6ca512067b329b0ca47065dce773a31370d91cebfcc3a8583d76e590d",
+      "stderr_size_bytes": 0
+    },
+    {
+      "tool": "semgrep",
+      "name": "category_logging",
+      "exit": 1,
+      "findings": 0,
+      "sarif_sha256": "3d2d9419f6676434cb2f67d4944dc98b578ceec70214325370fb9c1e2423c365",
+      "stderr_size_bytes": 0
+    },
+    {
+      "tool": "semgrep",
+      "name": "semgrep_owasp_top_10",
+      "exit": 1,
+      "findings": 21,
+      "sarif_sha256": "7fb46d05883ffdbf034c7c2f0445248e13d51ef7fa234df65ecb8a0b9d26ee2d",
+      "stderr_size_bytes": 0
+    }
+  ]
+}

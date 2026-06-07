@@ -1,0 +1,7 @@
+{"timestamp": "2026-06-07T14:49:29.825564+00:00", "level": "DEBUG", "logger": "mantishack", "module": "__init__", "function": "debug", "line": 267, "message": "MANTISHACK logging initialized - audit trail: C:\\Users\\prajw\\.openclaw\\workspace\\h1-workflow\\scanners\\mantishack_features\\out\\logs\\mantishack_1780843769_pid20464_0000.jsonl"}
+{"timestamp": "2026-06-07T14:49:31.906189+00:00", "level": "INFO", "logger": "mantishack", "module": "__init__", "function": "info", "line": 272, "message": "Starting automated code security scan"}
+{"timestamp": "2026-06-07T14:49:31.912670+00:00", "level": "INFO", "logger": "mantishack", "module": "__init__", "function": "info", "line": 272, "message": "Repository: ."}
+{"timestamp": "2026-06-07T14:49:31.913095+00:00", "level": "INFO", "logger": "mantishack", "module": "__init__", "function": "info", "line": 272, "message": "Policy version: v1"}
+{"timestamp": "2026-06-07T14:49:31.913095+00:00", "level": "INFO", "logger": "mantishack", "module": "__init__", "function": "info", "line": 272, "message": "Policy groups: auth,logging,security-audit"}
+{"timestamp": "2026-06-07T14:49:31.913651+00:00", "level": "WARNING", "logger": "mantishack", "module": "__init__", "function": "warning", "line": 277, "message": "Unknown policy groups (no rule directory found): security-audit"}
+{"timestamp": "2026-06-07T14:49:31.913651+00:00", "level": "INFO", "logger": "mantishack", "module": "__init__", "function": "info", "line": 272, "message": "Using 2 rule directories"}

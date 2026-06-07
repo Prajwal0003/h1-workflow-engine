@@ -28,5 +28,9 @@ RUN python setup_tools.py
 # Download industry-standard wordlists (SecLists)
 # Already handled by setup_tools.py
 
+# Run as non-root user
+RUN useradd -m scanner && chown -R scanner /app
+USER scanner
+
 # Command to run the scanner by default
 CMD ["python", "autopilot.py", "--dynamic"]

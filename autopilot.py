@@ -392,8 +392,8 @@ def check_blind_oob(url):
         headers = get_stealth_headers()
         headers["X-Forwarded-For"] = f"http://{INTERACTSH_URL}"
         headers["User-Agent"] = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) curl/7.68.0 http://{INTERACTSH_URL}"
-        test_url = f"{url}?callback=http://{INTERACTSH_URL}&url=http://{INTERACTSH_URL}"
-        requests.get(test_url, headers=headers, timeout=3, verify=False)
+        test_url = f"{url}?callback=https://{INTERACTSH_URL}&url=https://{INTERACTSH_URL}"
+        requests.get(test_url, headers=headers, timeout=3, verify=True)
     except: pass
     return None
 

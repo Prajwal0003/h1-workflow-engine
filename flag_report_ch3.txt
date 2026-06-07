@@ -1,0 +1,18 @@
+Target: https://chaitanyashelar409-ch3.4.213.214.70.nip.io/
+
+Vulnerability: Blind SQL Injection (Boolean-based)
+
+Description:
+The login form at `/index.php` is vulnerable to boolean-based blind SQL injection in the `username` parameter. By sending specially crafted payloads, it's possible to extract the contents of the database character by character, based on whether the application returns a "password" error (username exists/true) or a "username" error (username doesn't exist/false).
+
+Exploitation:
+1. Enumerated the database and found the `payroll_db` schema.
+2. Extracted tables and found the `users` table.
+3. Extracted columns from `users` and found `user_id`, `username`, and `password`.
+4. Dumped the `users` table, which contained a single user `admin` with the password field containing `7d39307ae824e70052c0aa16816a9b16`.
+
+The extracted password string `7d39307ae824e70052c0aa16816a9b16` appears to be the flag.
+If formatted with hyphens to match standard UUID CTF flags:
+{7d39307a-e824-e700-52c0-aa16816a9b16}
+
+Alternatively, the flag could be `{7d39307ae824e70052c0aa16816a9b16}`.
