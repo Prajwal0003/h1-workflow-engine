@@ -21,6 +21,9 @@ def set_auth_context(cookie=None, bearer=None):
     GLOBAL_COOKIE = cookie
     GLOBAL_BEARER = bearer
 
+def get_stealth_headers():
+    return stealth_headers()
+
 def stealth_headers():
     headers = {
         "User-Agent": random.choice(USER_AGENTS),

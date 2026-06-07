@@ -434,9 +434,25 @@ def install_awesome_bugbounty_tools_mass():
     except Exception as e:
         print(f"[-] Failed mass clone: {e}")
 
+if __name__ == "__main__":
+    print("=" * 60)
+    print("  AEGIS-AUTO — Full Arsenal Installer")
+    print("  Based on awesome-bugbounty-tools")
+    print("=" * 60)
+    os_name, arch_name, ext = get_platform_info()
+    print(f"[*] Detected OS: {os_name} | Arch: {arch_name}\n")
+
+    # Install main tools
+    install_nuclei(os_name, arch_name)
+    install_subfinder(os_name, arch_name)
+    install_httpx(os_name, arch_name)
+    install_ffuf(os_name, arch_name)
+    install_katana(os_name, arch_name)
+    
+    # Run mass clone
     install_awesome_bugbounty_tools_mass()
 
-    # === Wordlists & Config ===
+    # Get wordlists and configs
     download_wordlists()
     create_env_template()
 

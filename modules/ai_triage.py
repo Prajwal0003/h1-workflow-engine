@@ -173,13 +173,13 @@ RESPOND IN EXACTLY THIS JSON FORMAT (no markdown, no code blocks):
     if gemini_res and not groq_res: return gemini_res
     if groq_res and not gemini_res: return groq_res
 
-    # Consensus logic: If EITHER AI says FALSE_POSITIVE, we drop it (Strict Zero-Trust)
-    if gemini_res.get("verdict") == "FALSE_POSITIVE" or groq_res.get("verdict") == "FALSE_POSITIVE":
-        return {"verdict": "FALSE_POSITIVE", "confidence": max(gemini_res.get("confidence", 0), groq_res.get("confidence", 0)), "reasoning": f"Gemini: {gemini_res.get('verdict')}, Groq: {groq_res.get('verdict')} - Strict Block"}
+    # Consensus logic: If EITHER AI says TRUE_POSITIVE, we keep it (Relaxed Filter for Uncensored Groq)
+    if gemini_res.get("verdict") == "TRUE_POSITIVE" or groq_res.get("verdict") == "TRUE_POSITIVE":
+        return {"verdict": "TRUE_POSITIVE", "confidence": max(gemini_res.get("confidence", 0), groq_res.get("confidence", 0)), "reasoning": f"At least one AI verified it. Gemini: {gemini_res.get('verdict')}, Groq: {groq_res.get('verdict')}"}
     
-    # If both agree it's TRUE_POSITIVE
-    if gemini_res.get("verdict") == "TRUE_POSITIVE" and groq_res.get("verdict") == "TRUE_POSITIVE":
-        return gemini_res
+    # If both say FALSE_POSITIVE
+    if gemini_res.get("verdict") == "FALSE_POSITIVE" and groq_res.get("verdict") == "FALSE_POSITIVE":
+        return {"verdict": "FALSE_POSITIVE", "confidence": max(gemini_res.get("confidence", 0), groq_res.get("confidence", 0)), "reasoning": "Both AIs agreed it is a false positive."}
         
     return {"verdict": "NEEDS_REVIEW", "confidence": 0.5, "reasoning": f"No consensus: Gemini={gemini_res.get('verdict')}, Groq={groq_res.get('verdict')}"}
 

@@ -51,6 +51,8 @@ try:
     from scanners.api_schema import check_api_schema
     from scanners.mass_assignment import check_mass_assignment
     from scanners.cache_deception import check_cache_deception
+    from scanners.dorking import run_dorking
+    from scanners.graphql_parser import check_graphql
     SCANNERS_LOADED = True
 except ImportError as e:
     print(f"[!] Some scanner modules not loaded: {e}")
@@ -1051,6 +1053,8 @@ def scan_target_fast(handle, target_data):
                 tasks.append(executor.submit(check_api_schema, b))
                 tasks.append(executor.submit(check_mass_assignment, b))
                 tasks.append(executor.submit(check_cache_deception, b))
+                tasks.append(executor.submit(run_dorking, b))
+                tasks.append(executor.submit(check_graphql, b))
                 tasks.append(executor.submit(check_xss, b))
                 tasks.append(executor.submit(check_dom_xss, b))
                 tasks.append(executor.submit(check_ssrf, b))
@@ -1105,9 +1109,27 @@ def scan_target_fast(handle, target_data):
                 tasks.append(executor.submit(check_lfi, u))
 
             # === Feature 2: Dual-Session IDOR Detection ===
-            if FEATURES_LOADED and IDOR_CREDENTIALS:
+            # === Feature 3: Dual-Session IDOR Scanning ===
+            if FEATURES_LOADED:
                 # Check if we have credentials for this specific program/domain
                 domain_creds = IDOR_CREDENTIALS.get(handle) or IDOR_CREDENTIALS.get("default")
+                
+                # NEW: If credentials are not present but user wants auto-auth
+                if not domain_creds and hasattr(args, 'google_sso_emails') and args.google_sso_emails:
+                    try:
+                        from modules.google_sso_automator import get_sso_credentials
+                        emails = args.google_sso_emails.split(",")
+                        passes = args.google_sso_passes.split(",")
+                        if len(emails) == 2 and len(passes) == 2:
+                            log(f"[*] Dynamically grabbing Google SSO session for {handle}...")
+                            # Attempt to auth on the first URL we found for this program
+                            login_url = target_data["urls"][0] if target_data.get("urls") else f"https://{handle}.com/login"
+                            domain_creds = get_sso_credentials(login_url, emails[0], passes[0], emails[1], passes[1])
+                            # Cache it in memory so we don't auth twice
+                            IDOR_CREDENTIALS[handle] = domain_creds
+                    except Exception as e:
+                        log(f"[-] Auto Google SSO failed for {handle}: {e}")
+
                 if domain_creds:
                     tasks.append(executor.submit(check_idor_dual_session, b, handle, domain_creds))
 
@@ -1217,7 +1239,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("target", nargs="?", help="Specific target")
     parser.add_argument("--dynamic", action="store_true", help="Dynamically fetch fresh targets")
-    args = parser.parse_args()
+    parser.add_argument("--google-sso-emails", type=str, help="Comma separated list of two Google emails for IDOR testing")
+    parser.add_argument("--google-sso-passes", type=str, help="Comma separated list of two Google passwords for IDOR testing")
+    args, unknown = parser.parse_known_args()
 
     if args.target:
         if args.dynamic:
@@ -1436,6 +1460,8 @@ if __name__ == "__main__":
     parser.add_argument("--dynamic", action="store_true", help="Dynamically select targets")
     parser.add_argument("--cookie", type=str, help="Session cookie for authenticated scanning")
     parser.add_argument("--bearer", type=str, help="Bearer token for authenticated scanning")
+    parser.add_argument("--google-sso-emails", type=str, help="Comma separated list of two Google emails for IDOR testing")
+    parser.add_argument("--google-sso-passes", type=str, help="Comma separated list of two Google passwords for IDOR testing")
     
     args, unknown = parser.parse_known_args()
     
