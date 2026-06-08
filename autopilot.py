@@ -130,7 +130,7 @@ NEO4J_USER = ENV_VARS.get("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = ENV_VARS.get("NEO4J_PASSWORD", "password123")
 
 # IDOR dual-session credentials (optional — configure per target)
-IDOR_CREDENTIALS = None
+IDOR_CREDENTIALS = {}
 try:
     idor_creds_path = Path("data/idor_credentials.json")
     if idor_creds_path.exists():
