@@ -3,6 +3,7 @@ import json
 import logging
 from pathlib import Path
 from modules.burp_analyzer import get_ai_response
+from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER
 
 def run_headless_crawler_analyzer(url):
     """
@@ -34,6 +35,15 @@ def run_headless_crawler_analyzer(url):
         "-json",
         "-o", str(output_file)
     ]
+    
+    headers = []
+    if GLOBAL_COOKIE:
+        headers.append(f"Cookie: {GLOBAL_COOKIE}")
+    if GLOBAL_BEARER:
+        headers.append(f"Authorization: Bearer {GLOBAL_BEARER}")
+        
+    for h in headers:
+        cmd.extend(["-H", h])
     
     try:
         # Crawl for up to 3 minutes

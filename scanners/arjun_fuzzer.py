@@ -2,6 +2,7 @@ import subprocess
 import json
 from pathlib import Path
 from urllib.parse import urlparse
+from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER
 
 def run_arjun_scan(url):
     """
@@ -28,6 +29,15 @@ def run_arjun_scan(url):
         "--passive", "-", # Disable passive sources to keep it fast/focused
         "-oJ", str(output_file)
     ]
+    
+    headers = []
+    if GLOBAL_COOKIE:
+        headers.append(f"Cookie: {GLOBAL_COOKIE}")
+    if GLOBAL_BEARER:
+        headers.append(f"Authorization: Bearer {GLOBAL_BEARER}")
+        
+    for h in headers:
+        cmd.extend(["--headers", h])
     
     try:
         subprocess.run(cmd, capture_output=True, text=True, timeout=120)

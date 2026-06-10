@@ -1,5 +1,6 @@
 import subprocess
 from pathlib import Path
+from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER
 
 def run_xsstrike_scan(url):
     """
@@ -22,6 +23,15 @@ def run_xsstrike_scan(url):
         "--batch"
     ]
     
+    headers = []
+    if GLOBAL_COOKIE:
+        headers.append(f"Cookie: {GLOBAL_COOKIE}")
+    if GLOBAL_BEARER:
+        headers.append(f"Authorization: Bearer {GLOBAL_BEARER}")
+        
+    if headers:
+        cmd.extend(["--headers", "\\n".join(headers)])
+        
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         output = result.stdout.lower()

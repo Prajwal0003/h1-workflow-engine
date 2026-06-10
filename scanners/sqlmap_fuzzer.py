@@ -2,6 +2,7 @@ import subprocess
 import os
 import random
 from pathlib import Path
+from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER
 
 def run_sqlmap_scan(url):
     """
@@ -31,6 +32,11 @@ def run_sqlmap_scan(url):
         "--threads=10",
         "--dbs" # Try to extract databases if vulnerable
     ]
+    
+    if GLOBAL_COOKIE:
+        cmd.extend(["--cookie", GLOBAL_COOKIE])
+    if GLOBAL_BEARER:
+        cmd.extend(["--headers", f"Authorization: Bearer {GLOBAL_BEARER}"])
     
     try:
         # Run sqlmap with a hard timeout of 10 minutes to prevent hanging

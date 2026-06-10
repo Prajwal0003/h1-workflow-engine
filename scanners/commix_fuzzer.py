@@ -1,5 +1,6 @@
 import subprocess
 from pathlib import Path
+from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER
 
 def run_commix_scan(url):
     """
@@ -22,6 +23,11 @@ def run_commix_scan(url):
         "--os-cmd=id"
     ]
     
+    if GLOBAL_COOKIE:
+        cmd.extend(["--cookie", GLOBAL_COOKIE])
+    if GLOBAL_BEARER:
+        cmd.extend(["--headers", f"Authorization: Bearer {GLOBAL_BEARER}"])
+        
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         output = result.stdout.lower()
