@@ -66,8 +66,9 @@ try:
     from scanners.wayback_scraper import fetch_wayback_urls
     from scanners.subdomain_takeover import check_subdomain_takeover
     from scanners.cors_scanner import check_cors_misconfig
-    from scanners.graphql_dumper import check_graphql_introspection
     from scanners.naabu_scanner import run_naabu_scan
+    from scanners.host_header_fuzzer import run_host_header_fuzzer
+    from scanners.open_redirect_fuzzer import run_open_redirect_fuzzer
     from modules.payload_extractor import extract_payloads
     
     # Dynamically load AI-generated custom tools
@@ -1305,6 +1306,8 @@ def scan_target_fast(handle, target_data):
                 tasks.append(executor.submit(run_wcd_scan, b)) # Zero-FP Web Cache Deception
                 tasks.append(executor.submit(run_mass_assignment_fuzzer, b)) # Privilege Escalation
                 tasks.append(executor.submit(run_cloud_ssrf_fuzzer, b)) # Cloud Metadata SSRF
+                tasks.append(executor.submit(run_host_header_fuzzer, b)) # Host Header Injection
+                tasks.append(executor.submit(run_open_redirect_fuzzer, b)) # Zero-FP Open Redirect
                 
                 tasks.append(executor.submit(run_arjun_scan, b)) # Parameter Discovery first
                 tasks.append(executor.submit(check_hardcoded_payloads, b))
