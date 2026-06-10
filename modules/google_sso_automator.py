@@ -30,7 +30,7 @@ async def automate_google_login(target_login_url, email, password, profile_dir_n
         # Launch non-headless to avoid Google anti-bot and allow manual CAPTCHA solving if needed
         browser = await p.chromium.launch_persistent_context(
             user_data_dir=str(profile_path),
-            headless=False,
+            headless=True, # Run completely hidden so it doesn't pop up on the screen
             args=["--disable-blink-features=AutomationControlled"]
         )
         
@@ -44,11 +44,12 @@ async def automate_google_login(target_login_url, email, password, profile_dir_n
         try:
             # Common selectors for Google SSO buttons
             sso_button = page.locator("button:has-text('Google'), a:has-text('Google'), div[role='button']:has-text('Google')").first
-            await sso_button.wait_for(state="visible", timeout=10000)
+            await sso_button.wait_for(state="visible", timeout=5000)
             await sso_button.click()
         except Exception:
-            logging.warning("[!] Could not auto-detect Google SSO button. Please click it manually in the opened browser within 20 seconds.")
-            await asyncio.sleep(20)
+            logging.info("[!] No Google SSO button found on this page. Skipping authentication to avoid hanging the daemon.")
+            await browser.close()
+            return ""
             
         # 2. Wait for Google Login popup or redirect
         logging.info("[*] Waiting for Google authentication page...")
