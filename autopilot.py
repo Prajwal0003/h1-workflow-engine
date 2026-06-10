@@ -64,6 +64,9 @@ try:
     from scanners.js_secrets_hunter import hunt_js_secrets
     from scanners.wayback_scraper import fetch_wayback_urls
     from scanners.subdomain_takeover import check_subdomain_takeover
+    from scanners.cors_scanner import check_cors_misconfig
+    from scanners.graphql_dumper import check_graphql_introspection
+    from scanners.naabu_scanner import run_naabu_scan
     from modules.payload_extractor import extract_payloads
     
     # Dynamically load AI-generated custom tools
@@ -1292,8 +1295,11 @@ def scan_target_fast(handle, target_data):
                 
                 # Exploitation scanners
                 tasks.append(executor.submit(check_subdomain_takeover, b)) # Fast DNS resolution first
+                tasks.append(executor.submit(run_naabu_scan, b)) # Discover hidden dev ports
                 tasks.append(executor.submit(fetch_wayback_urls, b)) # Time-travel recon
                 tasks.append(executor.submit(hunt_js_secrets, b)) # Parse JS for AWS keys
+                tasks.append(executor.submit(check_cors_misconfig, b)) # Zero-FP CORS takeover
+                tasks.append(executor.submit(check_graphql_introspection, b)) # GraphQL Dumper
                 
                 tasks.append(executor.submit(run_arjun_scan, b)) # Parameter Discovery first
                 tasks.append(executor.submit(check_hardcoded_payloads, b))
