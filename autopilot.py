@@ -61,6 +61,9 @@ try:
     from scanners.arjun_fuzzer import run_arjun_scan
     from scanners.ssrfmap_fuzzer import run_ssrfmap_scan
     from scanners.headless_traffic_analyzer import run_headless_crawler_analyzer
+    from scanners.js_secrets_hunter import hunt_js_secrets
+    from scanners.wayback_scraper import fetch_wayback_urls
+    from scanners.subdomain_takeover import check_subdomain_takeover
     from modules.payload_extractor import extract_payloads
     
     # Dynamically load AI-generated custom tools
@@ -1288,6 +1291,10 @@ def scan_target_fast(handle, target_data):
                 tasks.append(executor.submit(run_headless_crawler_analyzer, b))
                 
                 # Exploitation scanners
+                tasks.append(executor.submit(check_subdomain_takeover, b)) # Fast DNS resolution first
+                tasks.append(executor.submit(fetch_wayback_urls, b)) # Time-travel recon
+                tasks.append(executor.submit(hunt_js_secrets, b)) # Parse JS for AWS keys
+                
                 tasks.append(executor.submit(run_arjun_scan, b)) # Parameter Discovery first
                 tasks.append(executor.submit(check_hardcoded_payloads, b))
                 tasks.append(executor.submit(run_sqlmap_scan, b))
