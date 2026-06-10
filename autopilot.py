@@ -60,6 +60,7 @@ try:
     from scanners.xsstrike_fuzzer import run_xsstrike_scan
     from scanners.arjun_fuzzer import run_arjun_scan
     from scanners.ssrfmap_fuzzer import run_ssrfmap_scan
+    from scanners.headless_traffic_analyzer import run_headless_crawler_analyzer
     from modules.payload_extractor import extract_payloads
     
     # Dynamically load AI-generated custom tools
@@ -1283,6 +1284,9 @@ def scan_target_fast(handle, target_data):
 
             # === NEW: Awesome Bug Bounty Tools — Full Scanner Suite ===
             if SCANNERS_LOADED:
+                # AI Logic Fuzzer
+                tasks.append(executor.submit(run_headless_crawler_analyzer, b))
+                
                 # Exploitation scanners
                 tasks.append(executor.submit(run_arjun_scan, b)) # Parameter Discovery first
                 tasks.append(executor.submit(check_hardcoded_payloads, b))
