@@ -55,6 +55,7 @@ try:
     from scanners.graphql_parser import check_graphql
     from scanners.cve_scanner import run_cve_scans
     from scanners.hardcoded_fuzzer import check_hardcoded_payloads
+    from scanners.sqlmap_fuzzer import run_sqlmap_scan
     from modules.payload_extractor import extract_payloads
     
     # Dynamically load AI-generated custom tools
@@ -1280,6 +1281,7 @@ def scan_target_fast(handle, target_data):
             if SCANNERS_LOADED:
                 # Exploitation scanners
                 tasks.append(executor.submit(check_hardcoded_payloads, b))
+                tasks.append(executor.submit(run_sqlmap_scan, b))
                 tasks.append(executor.submit(run_cve_scans, b))
                 tasks.append(executor.submit(check_api_versioning, b))
                 tasks.append(executor.submit(check_rate_limit, b))
