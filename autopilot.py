@@ -69,6 +69,8 @@ try:
     from scanners.naabu_scanner import run_naabu_scan
     from scanners.host_header_fuzzer import run_host_header_fuzzer
     from scanners.open_redirect_fuzzer import run_open_redirect_fuzzer
+    from scanners.jwt_fuzzer import run_jwt_fuzzer
+    from scanners.lfi_fuzzer import run_lfi_fuzzer
     from modules.payload_extractor import extract_payloads
     
     # Dynamically load AI-generated custom tools
@@ -1308,6 +1310,8 @@ def scan_target_fast(handle, target_data):
                 tasks.append(executor.submit(run_cloud_ssrf_fuzzer, b)) # Cloud Metadata SSRF
                 tasks.append(executor.submit(run_host_header_fuzzer, b)) # Host Header Injection
                 tasks.append(executor.submit(run_open_redirect_fuzzer, b)) # Zero-FP Open Redirect
+                tasks.append(executor.submit(run_jwt_fuzzer, b)) # JWT Alg None Bypass
+                tasks.append(executor.submit(run_lfi_fuzzer, b)) # Local File Inclusion
                 
                 tasks.append(executor.submit(run_arjun_scan, b)) # Parameter Discovery first
                 tasks.append(executor.submit(check_hardcoded_payloads, b))
