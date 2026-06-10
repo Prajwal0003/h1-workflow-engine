@@ -18,11 +18,32 @@ def send_discord_alert(msg):
                     requests.post(url, json={"content": msg}, timeout=3)
                 except: pass
 
+async def check_has_sso(target_login_url):
+    """Headless pre-check to see if a page actually has a Google SSO button."""
+    async with async_playwright() as p:
+        try:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.goto(target_login_url, timeout=15000)
+            sso_button = page.locator("button:has-text('Google'), a:has-text('Google'), div[role='button']:has-text('Google')").first
+            await sso_button.wait_for(state="visible", timeout=5000)
+            await browser.close()
+            return True
+        except Exception:
+            try: await browser.close()
+            except: pass
+            return False
+
 async def automate_google_login(target_login_url, email, password, profile_dir_name):
     """
     Automates Google SSO on a target website.
     Uses a persistent browser context to avoid Google's anti-bot protections.
     """
+    # First, do a silent headless check so we don't pop up windows on random sites (like truecaller business)
+    if not await check_has_sso(target_login_url):
+        logging.info(f"[!] No Google SSO detected on {target_login_url}. Skipping interactive login to prevent unwanted popups.")
+        return ""
+        
     profile_path = Path("data/browser_profiles") / profile_dir_name
     profile_path.mkdir(parents=True, exist_ok=True)
     
@@ -30,7 +51,7 @@ async def automate_google_login(target_login_url, email, password, profile_dir_n
         # Launch non-headless to avoid Google anti-bot and allow manual CAPTCHA solving if needed
         browser = await p.chromium.launch_persistent_context(
             user_data_dir=str(profile_path),
-            headless=True, # Run completely hidden so it doesn't pop up on the screen
+            headless=False, # Restored to visible mode as requested by user
             args=["--disable-blink-features=AutomationControlled"]
         )
         
@@ -44,12 +65,11 @@ async def automate_google_login(target_login_url, email, password, profile_dir_n
         try:
             # Common selectors for Google SSO buttons
             sso_button = page.locator("button:has-text('Google'), a:has-text('Google'), div[role='button']:has-text('Google')").first
-            await sso_button.wait_for(state="visible", timeout=5000)
+            await sso_button.wait_for(state="visible", timeout=10000)
             await sso_button.click()
         except Exception:
-            logging.info("[!] No Google SSO button found on this page. Skipping authentication to avoid hanging the daemon.")
-            await browser.close()
-            return ""
+            logging.warning("[!] Could not auto-detect Google SSO button. Please click it manually in the opened browser within 20 seconds.")
+            await asyncio.sleep(20)
             
         # 2. Wait for Google Login popup or redirect
         logging.info("[*] Waiting for Google authentication page...")
