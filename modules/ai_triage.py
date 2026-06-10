@@ -85,6 +85,24 @@ def _replay_request(url, method="GET", headers=None, data=None, timeout=8):
         return None, None, None
 
 
+POLICY_CACHE = {}
+
+def fetch_program_policy(handle):
+    if handle in POLICY_CACHE:
+        return POLICY_CACHE[handle]
+    if not handle or handle == "unknown":
+        return ""
+    try:
+        import requests
+        headers = {'Content-Type': 'application/json'}
+        payload = {'query': f'query {{ team(handle: "{handle}") {{ policy }} }}'}
+        r = requests.post('https://hackerone.com/graphql', json=payload, headers=headers, timeout=10)
+        policy = r.json().get('data', {}).get('team', {}).get('policy', '')
+        POLICY_CACHE[handle] = policy or ""
+        return POLICY_CACHE[handle]
+    except:
+        return ""
+
 def ai_triage_finding(finding, api_key):
     """
     Use Gemini AI to intelligently verify whether a scanner finding is a
@@ -104,6 +122,11 @@ def ai_triage_finding(finding, api_key):
     target_url = finding.get("url", "")
     detail = finding.get("detail", "")
     original_severity = finding.get("severity", "MEDIUM")
+    program_handle = finding.get("program", "unknown")
+
+    # Fetch policy
+    policy_text = fetch_program_policy(program_handle)
+    policy_snippet = policy_text[:4000] if policy_text else "N/A"
 
     # Replay the suspicious request to capture full HTTP transaction
     http_transaction, status_code, body = _replay_request(target_url)
@@ -120,6 +143,10 @@ def ai_triage_finding(finding, api_key):
 VULNERABILITY TYPE: {vuln_type}
 REPORTED SEVERITY: {original_severity}
 SCANNER DETAIL: {detail}
+PROGRAM HANDLE: {program_handle}
+
+PROGRAM POLICY/RULES:
+{policy_snippet}
 
 SUSPICIOUS HTTP TRANSACTION:
 {http_transaction}
@@ -137,11 +164,11 @@ ANALYSIS INSTRUCTIONS:
    - The response body being identical or nearly identical to the baseline
 3. Duplicate Risk Assessment:
    - Based on common bug bounty patterns, rate the duplicate risk: LOW, MEDIUM, HIGH, or VERY_HIGH.
-   - For example, basic CORS or missing headers are usually VERY_HIGH. IDORs or Logic bugs are LOW.
 4. If TRUE POSITIVE, does the evidence warrant the reported severity or should it be adjusted?
+5. PROGRAM POLICY CHECK: Read the PROGRAM POLICY/RULES above. If the policy explicitly forbids this type of vulnerability, states it is out of scope, or mentions it will be rejected (e.g., 'no Google Maps API keys', 'billing abuse is out of scope', etc.), YOU MUST MARK IT AS FALSE_POSITIVE and set reasoning to 'Out of scope per program policy'.
 
 RESPOND IN EXACTLY THIS JSON FORMAT (no markdown, no code blocks):
-{{"verdict": "TRUE_POSITIVE" or "FALSE_POSITIVE" or "NEEDS_REVIEW", "confidence": 0.0 to 1.0, "reasoning": "explanation of WAF/redirect checks", "severity_adjust": null or "CRITICAL" or "HIGH" or "MEDIUM" or "LOW", "duplicate_risk": "VERY_HIGH" or "HIGH" or "MEDIUM" or "LOW"}}
+{{"verdict": "TRUE_POSITIVE" or "FALSE_POSITIVE" or "NEEDS_REVIEW", "confidence": 0.0 to 1.0, "reasoning": "explanation of WAF/redirect/policy checks", "severity_adjust": null or "CRITICAL" or "HIGH" or "MEDIUM" or "LOW", "duplicate_risk": "VERY_HIGH" or "HIGH" or "MEDIUM" or "LOW"}}
 """
 
     def _parse(resp):
