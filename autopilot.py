@@ -58,6 +58,8 @@ try:
     from scanners.sqlmap_fuzzer import run_sqlmap_scan
     from scanners.commix_fuzzer import run_commix_scan
     from scanners.xsstrike_fuzzer import run_xsstrike_scan
+    from scanners.arjun_fuzzer import run_arjun_scan
+    from scanners.ssrfmap_fuzzer import run_ssrfmap_scan
     from modules.payload_extractor import extract_payloads
     
     # Dynamically load AI-generated custom tools
@@ -1282,10 +1284,12 @@ def scan_target_fast(handle, target_data):
             # === NEW: Awesome Bug Bounty Tools — Full Scanner Suite ===
             if SCANNERS_LOADED:
                 # Exploitation scanners
+                tasks.append(executor.submit(run_arjun_scan, b)) # Parameter Discovery first
                 tasks.append(executor.submit(check_hardcoded_payloads, b))
                 tasks.append(executor.submit(run_sqlmap_scan, b))
                 tasks.append(executor.submit(run_commix_scan, b))
                 tasks.append(executor.submit(run_xsstrike_scan, b))
+                tasks.append(executor.submit(run_ssrfmap_scan, b))
                 tasks.append(executor.submit(run_cve_scans, b))
                 tasks.append(executor.submit(check_api_versioning, b))
                 tasks.append(executor.submit(check_rate_limit, b))
