@@ -67,6 +67,7 @@ try:
     from scanners.subdomain_takeover import check_subdomain_takeover
     from scanners.cors_scanner import check_cors_misconfig
     from scanners.naabu_scanner import run_naabu_scan
+    from scanners.graphql_dumper import check_graphql_introspection
     from scanners.host_header_fuzzer import run_host_header_fuzzer
     from scanners.open_redirect_fuzzer import run_open_redirect_fuzzer
     from scanners.jwt_fuzzer import run_jwt_fuzzer
@@ -1196,7 +1197,7 @@ def check_shodan(domain):
     return findings
 
 # --- Engine ---
-def scan_target_fast(handle, target_data):
+def scan_target_fast(handle, target_data, args=None):
     urls = list(target_data.get("urls", []))
     scope_mgr = target_data.get("scope_mgr")
     findings = []  # Initialize BEFORE any use
@@ -1411,7 +1412,7 @@ def scan_target_fast(handle, target_data):
                 domain_creds = IDOR_CREDENTIALS.get(handle) or IDOR_CREDENTIALS.get("default")
                 
                 # NEW: If credentials are not present but user wants auto-auth
-                if not domain_creds and hasattr(args, 'google_sso_emails') and args.google_sso_emails:
+                if not domain_creds and args and hasattr(args, 'google_sso_emails') and args.google_sso_emails:
                     try:
                         from modules.google_sso_automator import get_sso_credentials
                         emails = args.google_sso_emails.split(",")
@@ -1611,7 +1612,7 @@ def main():
         
     all_findings = []
     for handle, target_data in targets.items():
-        all_findings.extend(scan_target_fast(handle, target_data))
+        all_findings.extend(scan_target_fast(handle, target_data, args))
         
     new_count = 0
     verified_count = 0

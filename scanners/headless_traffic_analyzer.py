@@ -2,8 +2,9 @@ import subprocess
 import json
 import logging
 from pathlib import Path
-from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER
+from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER, get_bin
 import os
+import shutil
 
 def run_headless_crawler_analyzer(url):
     """
@@ -14,10 +15,13 @@ def run_headless_crawler_analyzer(url):
     """
     findings = []
     
-    katana_bin = Path("data/katana_bin/katana.exe")
-    if not katana_bin.exists():
-        logging.error("[-] Katana binary not found. Cannot run headless AI analyzer.")
-        return findings
+    katana_bin = get_bin("katana")
+    if not katana_bin:
+        if shutil.which("katana"):
+            katana_bin = "katana"
+        else:
+            logging.error("[-] Katana binary not found. Cannot run headless AI analyzer.")
+            return findings
         
     print(f"[*] Dispatching Headless AI Crawler (Katana) to analyze traffic on: {url}")
     
@@ -27,7 +31,7 @@ def run_headless_crawler_analyzer(url):
         
     # Run Katana with headless browser crawling to execute JS and capture complete DOM/responses
     cmd = [
-        str(katana_bin.absolute()),
+        str(Path(katana_bin).absolute()) if katana_bin != "katana" else katana_bin,
         "-u", url,
         "-headless",
         "-depth", "2", # Keep it shallow so we don't overwhelm the AI
