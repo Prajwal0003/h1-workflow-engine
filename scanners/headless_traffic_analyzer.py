@@ -17,7 +17,11 @@ def run_headless_crawler_analyzer(url):
     
     katana_bin = get_bin("katana")
     if not katana_bin:
-        if shutil.which("katana"):
+        # Fallback to checking local path explicitly (especially for Windows .exe)
+        local_exe = Path("data/katana_bin/katana.exe")
+        if local_exe.exists():
+            katana_bin = str(local_exe.absolute())
+        elif shutil.which("katana"):
             katana_bin = "katana"
         else:
             logging.error("[-] Katana binary not found. Cannot run headless AI analyzer.")
