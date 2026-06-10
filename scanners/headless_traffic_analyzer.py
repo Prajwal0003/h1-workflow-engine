@@ -2,8 +2,8 @@ import subprocess
 import json
 import logging
 from pathlib import Path
-from modules.burp_analyzer import get_ai_response
 from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER
+import os
 
 def run_headless_crawler_analyzer(url):
     """
@@ -91,21 +91,21 @@ Traffic Data:
                     prompt += f"Response snippet:\n{resp_body}\n\n"
                     
                 prompt += "\nOutput ONLY valid JSON containing a list of findings. Format: [{\"type\": \"<vuln_type>\", \"url\": \"<url>\", \"severity\": \"<HIGH/MEDIUM>\", \"detail\": \"<reasoning>\"}]"
-                
-                ai_analysis = get_ai_response(prompt)
-                
                 try:
-                    # Clean up markdown JSON blocks
-                    ai_analysis = ai_analysis.replace("```json", "").replace("```", "").strip()
-                    parsed_findings = json.loads(ai_analysis)
-                    for f in parsed_findings:
-                        if isinstance(f, dict) and "type" in f:
-                            f["confidence"] = "MEDIUM"
-                            f["verified"] = False
-                            f["source"] = "AI_TRAFFIC_ANALYZER"
-                            findings.append(f)
+                    from autopilot import get_ai_response
+                    ai_analysis = get_ai_response(prompt)
+                    
+                    if ai_analysis:
+                        ai_analysis = ai_analysis.replace("```json", "").replace("```", "").strip()
+                        parsed_findings = json.loads(ai_analysis)
+                        for f in parsed_findings:
+                            if isinstance(f, dict) and "type" in f:
+                                f["confidence"] = "MEDIUM"
+                                f["verified"] = False
+                                f["source"] = "AI_TRAFFIC_ANALYZER"
+                                findings.append(f)
                 except Exception as e:
-                    print(f"[-] AI returned invalid JSON for traffic analysis.")
+                    print(f"[-] AI returned invalid JSON for traffic analysis: {e}")
 
     except subprocess.TimeoutExpired:
         pass
