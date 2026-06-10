@@ -44,12 +44,13 @@ def hunt_js_secrets(url):
                         if isinstance(match, tuple): match = match[1]
                         if len(str(match)) > 150: continue # Prevent false positive massive strings
                         
+                        is_generic = (name == "Generic Secret")
                         findings.append({
                             "type": "HARDCODED_SECRET_LEAK",
                             "url": js_url,
-                            "severity": "CRITICAL",
-                            "confidence": "HIGH",
-                            "verified": True,
+                            "severity": "MEDIUM" if is_generic else "CRITICAL",
+                            "confidence": "MEDIUM" if is_generic else "HIGH",
+                            "verified": False if is_generic else True,
                             "detail": f"Exposed {name} found in JS file: {str(match)[:10]}***"
                         })
             except Exception: 

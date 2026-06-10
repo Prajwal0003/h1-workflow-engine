@@ -191,14 +191,24 @@ def send_discord(msg):
         requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=3)
     except: pass
 
+SENT_DISCORD_ALERTS = set()
+
 def send_discord_webhook(finding):
     if not DISCORD_WEBHOOK_URL or "your_discord_webhook" in DISCORD_WEBHOOK_URL:
         return
     if finding.get("severity") not in ["HIGH", "CRITICAL"]:
         return
+        
+    alert_key = (finding.get("type"), finding.get("url"))
+    if alert_key in SENT_DISCORD_ALERTS:
+        return # Prevent spamming the exact same finding multiple times
+    SENT_DISCORD_ALERTS.add(alert_key)
     confidence = finding.get("confidence", "LOW")
     if confidence == "LOW":
         return  # Don't spam Discord with unverified findings
+        
+    if finding.get("type") == "GRAPHQL_INTROSPECTION_LEAK" and not finding.get("verified", False):
+        return # Skip unverified GraphQL leaks as requested by the user to avoid FP spam
     verified = "✅ VERIFIED" if finding.get("verified") else ""
     conf_emoji = {"HIGH": "🟢", "MEDIUM": "🟡"}.get(confidence, "⚪")
     msg = (f"🚨 **{finding.get('severity')} Vulnerability Found!** {verified}\n"

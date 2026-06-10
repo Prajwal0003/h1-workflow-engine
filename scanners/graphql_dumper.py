@@ -47,9 +47,9 @@ def check_graphql_introspection(url):
                         findings.append({
                             "type": "GRAPHQL_INTROSPECTION_LEAK",
                             "url": ep,
-                            "severity": "HIGH",
+                            "severity": "MEDIUM",
                             "confidence": "HIGH",
-                            "verified": True, # Zero FP because it successfully parsed a valid GraphQL schema
+                            "verified": False, # Usually a false positive unless a mutation can be successfully executed unauthenticated
                             "detail": f"GraphQL Introspection is ENABLED! Dumped full API schema. Sensitive mutations available: {mutations_str}"
                         })
                         break # Only report once per target base

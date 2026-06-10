@@ -65,8 +65,20 @@ async def automate_google_login(target_login_url, email, password, profile_dir_n
             await sso_button.wait_for(state="visible", timeout=10000)
             await sso_button.click()
         except Exception:
-            logging.warning("[!] Could not auto-detect Google SSO button. Please click it manually in the opened browser within 20 seconds.")
-            await asyncio.sleep(20)
+            logging.warning("[!] Could not auto-detect Google SSO button on login page. Trying to find a Sign Up or Register link...")
+            try:
+                signup_link = page.locator("a:has-text('Sign Up'), a:has-text('Sign up'), a:has-text('Register'), button:has-text('Sign Up'), button:has-text('Register')").first
+                await signup_link.wait_for(state="visible", timeout=5000)
+                await signup_link.click()
+                await asyncio.sleep(3)
+                
+                # Look for Google SSO button again on the signup page
+                sso_button = page.locator("button:has-text('Google'), a:has-text('Google'), div[role='button']:has-text('Google')").first
+                await sso_button.wait_for(state="visible", timeout=10000)
+                await sso_button.click()
+            except Exception:
+                logging.warning("[!] Could not auto-detect Google SSO button. Please click it manually in the opened browser within 30 seconds.")
+                await asyncio.sleep(30)
             
         # 2. Wait for Google Login popup or redirect
         logging.info("[*] Waiting for Google authentication page...")
@@ -97,17 +109,17 @@ async def automate_google_login(target_login_url, email, password, profile_dir_n
                 send_discord_alert(f"🚨 **Action Required:** The Autopilot is logging into `{target_login_url}` using `{email}`. Please check your phone for a Google 2FA/Verification prompt!")
                 
             # Wait for redirect back to target
-            logging.info("[*] Waiting for redirect back to target application...")
-            await page.wait_for_url(lambda url: "accounts.google.com" not in url, timeout=45000)
+            logging.info("[*] Waiting for redirect back to target application (Timeout: 2 minutes)...")
+            await page.wait_for_url(lambda url: "accounts.google.com" not in url, timeout=120000)
             send_discord_alert(f"✅ Google login successful for `{email}`!")
             
         except Exception as e:
-            logging.info("[*] Already logged in to Google in this profile, or manual intervention required.")
-            # Wait a bit for the user to manually intervene if Google throws a CAPTCHA or 2FA
-            await asyncio.sleep(15)
+            logging.info(f"[*] Manual intervention required. If you see an OTP/2FA prompt, please complete it. Waiting 90 seconds...")
+            # Wait longer for the user to manually intervene if Google throws a CAPTCHA or 2FA OTP
+            await asyncio.sleep(90)
             
-        logging.info("[*] Login flow complete. Extracting session cookies...")
-        await asyncio.sleep(5) # Let the target site load and set its JWTs/Cookies
+        logging.info("[*] Login flow complete. If you don't have an account, please complete the signup flow now (e.g. Accept TOS). Waiting 45 seconds before extracting cookies...")
+        await asyncio.sleep(45) # Give the user ample time to complete the signup if they don't have an account
         
         cookies = await browser.cookies()
         cookie_dict = {c["name"]: c["value"] for c in cookies}
