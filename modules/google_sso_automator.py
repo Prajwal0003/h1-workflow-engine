@@ -39,10 +39,7 @@ async def automate_google_login(target_login_url, email, password, profile_dir_n
     Automates Google SSO on a target website.
     Uses a persistent browser context to avoid Google's anti-bot protections.
     """
-    # First, do a silent headless check so we don't pop up windows on random sites (like truecaller business)
-    if not await check_has_sso(target_login_url):
-        logging.info(f"[!] No Google SSO detected on {target_login_url}. Skipping interactive login to prevent unwanted popups.")
-        return ""
+    # Removed headless check to allow interactive manual login even if Google SSO button isn't detected by playwright.
         
     profile_path = Path("data/browser_profiles") / profile_dir_name
     profile_path.mkdir(parents=True, exist_ok=True)
