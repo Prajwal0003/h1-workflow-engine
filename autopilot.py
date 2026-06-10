@@ -71,6 +71,16 @@ try:
     from scanners.open_redirect_fuzzer import run_open_redirect_fuzzer
     from scanners.jwt_fuzzer import run_jwt_fuzzer
     from scanners.lfi_fuzzer import run_lfi_fuzzer
+    from scanners.race_condition_h2 import run_h2_race_condition
+    from scanners.oob_ssrf import run_oob_ssrf
+    from scanners.prototype_pollution import run_prototype_pollution
+    from scanners.smuggling_advanced import run_smuggling_advanced
+    from scanners.oauth_hijack import run_oauth_hijack
+    from scanners.graphql_batching import run_graphql_batching
+    from scanners.swagger_matrix import run_swagger_matrix
+    from scanners.ssti_fuzzer import run_ssti_fuzzer
+    from scanners.dom_xss_tracer import run_dom_xss_tracer
+    from scanners.waf_evasion import run_waf_evasion
     from modules.payload_extractor import extract_payloads
     
     # Dynamically load AI-generated custom tools
@@ -1312,6 +1322,17 @@ def scan_target_fast(handle, target_data):
                 tasks.append(executor.submit(run_open_redirect_fuzzer, b)) # Zero-FP Open Redirect
                 tasks.append(executor.submit(run_jwt_fuzzer, b)) # JWT Alg None Bypass
                 tasks.append(executor.submit(run_lfi_fuzzer, b)) # Local File Inclusion
+                
+                tasks.append(executor.submit(run_h2_race_condition, b)) # HTTP/2 Race Conditions
+                tasks.append(executor.submit(run_oob_ssrf, b)) # Blind OOB SSRF via Interactsh
+                tasks.append(executor.submit(run_prototype_pollution, b)) # Client-Side Prototype Pollution
+                tasks.append(executor.submit(run_smuggling_advanced, b)) # HTTP Request Smuggling
+                tasks.append(executor.submit(run_oauth_hijack, b)) # OAuth 2.0 / SSO Hijacker
+                tasks.append(executor.submit(run_graphql_batching, b)) # GraphQL Batching / DoS
+                tasks.append(executor.submit(run_swagger_matrix, b)) # Swagger OpenAPI Matrix
+                tasks.append(executor.submit(run_ssti_fuzzer, b)) # Server-Side Template Injection
+                tasks.append(executor.submit(run_dom_xss_tracer, b)) # Headless DOM-XSS Tracer
+                tasks.append(executor.submit(run_waf_evasion, b)) # Auto-WAF Evasion Proxy
                 
                 tasks.append(executor.submit(run_arjun_scan, b)) # Parameter Discovery first
                 tasks.append(executor.submit(check_hardcoded_payloads, b))
