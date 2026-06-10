@@ -49,8 +49,9 @@ try:
     from scanners.rate_limit import check_rate_limit
     from scanners.js_analyzer import check_js_analyzer
     from scanners.api_schema import check_api_schema
-    from scanners.mass_assignment import check_mass_assignment
-    from scanners.cache_deception import check_cache_deception
+    from scanners.mass_assignment_fuzzer import run_mass_assignment_fuzzer
+    from scanners.wcd_advanced import run_wcd_scan
+    from scanners.cloud_ssrf_fuzzer import run_cloud_ssrf_fuzzer
     from scanners.dorking import run_dorking
     from scanners.graphql_parser import check_graphql
     from scanners.cve_scanner import run_cve_scans
@@ -1301,6 +1302,10 @@ def scan_target_fast(handle, target_data):
                 tasks.append(executor.submit(check_cors_misconfig, b)) # Zero-FP CORS takeover
                 tasks.append(executor.submit(check_graphql_introspection, b)) # GraphQL Dumper
                 
+                tasks.append(executor.submit(run_wcd_scan, b)) # Zero-FP Web Cache Deception
+                tasks.append(executor.submit(run_mass_assignment_fuzzer, b)) # Privilege Escalation
+                tasks.append(executor.submit(run_cloud_ssrf_fuzzer, b)) # Cloud Metadata SSRF
+                
                 tasks.append(executor.submit(run_arjun_scan, b)) # Parameter Discovery first
                 tasks.append(executor.submit(check_hardcoded_payloads, b))
                 tasks.append(executor.submit(run_sqlmap_scan, b))
@@ -1312,8 +1317,6 @@ def scan_target_fast(handle, target_data):
                 tasks.append(executor.submit(check_rate_limit, b))
                 tasks.append(executor.submit(check_js_analyzer, b))
                 tasks.append(executor.submit(check_api_schema, b))
-                tasks.append(executor.submit(check_mass_assignment, b))
-                tasks.append(executor.submit(check_cache_deception, b))
                 tasks.append(executor.submit(run_dorking, b))
                 tasks.append(executor.submit(check_graphql, b))
                 
