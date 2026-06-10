@@ -56,6 +56,8 @@ try:
     from scanners.cve_scanner import run_cve_scans
     from scanners.hardcoded_fuzzer import check_hardcoded_payloads
     from scanners.sqlmap_fuzzer import run_sqlmap_scan
+    from scanners.commix_fuzzer import run_commix_scan
+    from scanners.xsstrike_fuzzer import run_xsstrike_scan
     from modules.payload_extractor import extract_payloads
     
     # Dynamically load AI-generated custom tools
@@ -1282,6 +1284,8 @@ def scan_target_fast(handle, target_data):
                 # Exploitation scanners
                 tasks.append(executor.submit(check_hardcoded_payloads, b))
                 tasks.append(executor.submit(run_sqlmap_scan, b))
+                tasks.append(executor.submit(run_commix_scan, b))
+                tasks.append(executor.submit(run_xsstrike_scan, b))
                 tasks.append(executor.submit(run_cve_scans, b))
                 tasks.append(executor.submit(check_api_versioning, b))
                 tasks.append(executor.submit(check_rate_limit, b))
