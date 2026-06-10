@@ -44,6 +44,21 @@ def run_tool_updater():
     except Exception as e:
         logging.error(f"Tool Updater encountered an error: {e}")
 
+def run_burp_analyzer():
+    logging.info("Pulling latest Burp Suite HTTP traffic for MCP AI Analysis...")
+    try:
+        # Run the burp analyzer we just built
+        subprocess.run(["python", "modules/burp_analyzer.py"], check=True, capture_output=True, text=True)
+    except Exception as e:
+        logging.error(f"Burp Analyzer encountered an error (is Burp running?): {e}")
+
+def run_github_api_hunter():
+    logging.info("Hunting GitHub for exposed API keys (Claude/Anthropic)...")
+    try:
+        subprocess.run(["python", "scanners/github_api_hunter.py"], check=True, capture_output=True, text=True)
+    except Exception as e:
+        logging.error(f"GitHub API Hunter encountered an error: {e}")
+
 if __name__ == "__main__":
     sso_emails = None
     sso_passes = None
@@ -60,6 +75,8 @@ if __name__ == "__main__":
     while True:
         run_tool_updater()
         run_zero_day_watcher()
+        run_burp_analyzer()
+        run_github_api_hunter()
         run_autopilot(sso_emails, sso_passes)
         
         # Run every 60 minutes (3600 seconds)

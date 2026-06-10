@@ -53,6 +53,9 @@ try:
     from scanners.cache_deception import check_cache_deception
     from scanners.dorking import run_dorking
     from scanners.graphql_parser import check_graphql
+    from scanners.cve_scanner import run_cve_scans
+    from scanners.hardcoded_fuzzer import check_hardcoded_payloads
+    from modules.payload_extractor import extract_payloads
     
     # Dynamically load AI-generated custom tools
     import importlib
@@ -124,6 +127,18 @@ GEMINI_API_KEY = ENV_VARS.get("GEMINI_API_KEY", "").strip('"\'')
 SHODAN_API_KEY = ENV_VARS.get("SHODAN_API_KEY", "")
 NOTION_API_KEY = ENV_VARS.get("NOTION_API_KEY", "")
 NOTION_DATABASE_ID = ENV_VARS.get("NOTION_DATABASE_ID", "")
+DEFECTDOJO_URL = ENV_VARS.get("DEFECTDOJO_URL", "")
+DEFECTDOJO_API_KEY = ENV_VARS.get("DEFECTDOJO_API_KEY", "")
+TELEGRAM_BOT_TOKEN = ENV_VARS.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = ENV_VARS.get("TELEGRAM_CHAT_ID", "")
+SLACK_WEBHOOK_URL = ENV_VARS.get("SLACK_WEBHOOK_URL", "")
+JIRA_URL = ENV_VARS.get("JIRA_URL", "")
+JIRA_EMAIL = ENV_VARS.get("JIRA_EMAIL", "")
+JIRA_API_TOKEN = ENV_VARS.get("JIRA_API_TOKEN", "")
+JIRA_PROJECT_KEY = ENV_VARS.get("JIRA_PROJECT_KEY", "")
+GITHUB_BACKUP_REPO = ENV_VARS.get("GITHUB_BACKUP_REPO", "")
+FREELLMAPI_URL = ENV_VARS.get("FREELLMAPI_URL", "http://localhost:3001/v1")
+FREELLMAPI_KEY = ENV_VARS.get("FREELLMAPI_KEY", "")
 INTERACTSH_URL = ENV_VARS.get("INTERACTSH_URL", "")
 NEO4J_URI = ENV_VARS.get("NEO4J_URI", "bolt://neo4j:7687")
 NEO4J_USER = ENV_VARS.get("NEO4J_USER", "neo4j")
@@ -193,8 +208,70 @@ def _call_groq_helper(prompt):
     except:
         return None
 
+def _call_freellmapi_helper(prompt):
+    import requests
+    if not FREELLMAPI_KEY or "your_" in FREELLMAPI_KEY: return None
+    headers = {"Authorization": f"Bearer {FREELLMAPI_KEY}", "Content-Type": "application/json"}
+    payload = {"model": "auto", "messages": [{"role": "user", "content": prompt}]}
+    try:
+        r = requests.post(f"{FREELLMAPI_URL}/chat/completions", json=payload, headers=headers, timeout=30)
+        return r.json()['choices'][0]['message']['content']
+    except:
+        return None
+
+def _call_claude_helper(prompt):
+    import requests
+    from pathlib import Path
+    keys_file = Path("data/anthropic_keys.txt")
+    if not keys_file.exists(): return None
+    keys = [k.strip() for k in keys_file.read_text().splitlines() if k.strip()]
+    if not keys: return None
+
+    for key in list(keys):
+        headers = {
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+        payload = {
+            "model": "claude-3-haiku-20240307",
+            "max_tokens": 2048,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+        try:
+            r = requests.post("https://api.anthropic.com/v1/messages", json=payload, headers=headers, timeout=15)
+            if r.status_code == 200:
+                keys.remove(key)
+                keys.append(key)
+                keys_file.write_text("\n".join(keys))
+                return r.json()["content"][0]["text"]
+            elif r.status_code in [401, 403]:
+                keys.remove(key)
+                keys_file.write_text("\n".join(keys))
+            elif r.status_code == 429:
+                keys.remove(key)
+                keys.append(key)
+                keys_file.write_text("\n".join(keys))
+        except:
+            pass
+    return None
+
+def get_ai_response(prompt):
+    claude_res = _call_claude_helper(prompt)
+    if claude_res: return claude_res
+    if GEMINI_API_KEY and "your_" not in GEMINI_API_KEY:
+        res = _call_gemini_helper(prompt, GEMINI_API_KEY)
+        if res: return res
+    if FREELLMAPI_KEY and "your_" not in FREELLMAPI_KEY:
+        res = _call_freellmapi_helper(prompt)
+        if res: return res
+    return _call_groq_helper(prompt)
+
 def generate_ai_report(finding):
-    if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return
+    has_gemini = GEMINI_API_KEY and "your_" not in GEMINI_API_KEY
+    from pathlib import Path
+    has_claude = Path("data/anthropic_keys.txt").exists() and len(Path("data/anthropic_keys.txt").read_text().strip()) > 10
+    if not has_gemini and not has_claude: return
     if finding.get("severity") not in ["HIGH", "CRITICAL"]: return
     if finding.get("confidence", "LOW") == "LOW": return
     
@@ -207,10 +284,10 @@ def generate_ai_report(finding):
               f"Detail: {finding.get('detail', 'N/A')}\n"
               f"Confidence: {finding.get('confidence', 'N/A')}\n"
               f"{proof_section}\n\n"
-              f"Include: Description, Steps to Reproduce, Impact, and Proof of Concept. "
+              f"Include: Description, Steps to Reproduce, Impact, Proof of Concept, and Remediation & Patch Advice. "
               f"If automated proof output is provided above, include it as evidence.")
     try:
-        report_text = _call_gemini_helper(prompt, GEMINI_API_KEY)
+        report_text = get_ai_response(prompt)
         if not report_text: return
         safe_name = finding.get('type', 'vuln').replace(' ', '_')[:30]
         report_path = REPORTS_DIR / f"report_{safe_name}_{int(time.time())}.md"
@@ -220,7 +297,10 @@ def generate_ai_report(finding):
 
 def ai_exploit_and_prove(finding):
     """AI generates a safe PoC exploit, runs it, captures proof for the report."""
-    if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return None
+    has_gemini = GEMINI_API_KEY and "your_" not in GEMINI_API_KEY
+    from pathlib import Path
+    has_claude = Path("data/anthropic_keys.txt").exists() and len(Path("data/anthropic_keys.txt").read_text().strip()) > 10
+    if not has_gemini and not has_claude: return None
     if finding.get("severity") not in ["MEDIUM", "HIGH", "CRITICAL"]: return None
     if finding.get("confidence", "LOW") == "LOW": return None
     
@@ -239,9 +319,7 @@ def ai_exploit_and_prove(finding):
               f"Output ONLY raw Python code. No markdown, no explanation.")
     
     try:
-        script = _call_gemini_helper(prompt, GEMINI_API_KEY)
-        if not script:
-            script = _call_groq_helper(prompt)
+        script = get_ai_response(prompt)
         if not script: return None
         script = script.strip()
         
@@ -308,6 +386,87 @@ IDOR_PARAMS = ["id", "userId", "bookingId"]
 TEST_IDS = ["1", "admin"]
 INTERESTING_PATHS = ["/robots.txt", "/.env", "/api/v1/", "/admin", "/.git/config"]
 
+
+def safe_request(method, url, **kwargs):
+    retries = kwargs.pop('retries', 3)
+    backoff = kwargs.pop('backoff', 1.0)
+    for attempt in range(retries):
+        try:
+            r = requests.request(method, url, **kwargs)
+            if r.status_code == 429:
+                time.sleep(backoff * (attempt + 1))
+                continue
+            return r
+        except requests.exceptions.RequestException:
+            if attempt == retries - 1:
+                raise
+            time.sleep(backoff)
+    return None
+
+def create_defectdojo_finding(finding):
+    if not DEFECTDOJO_URL or not DEFECTDOJO_API_KEY or "your_" in DEFECTDOJO_API_KEY: return
+    try:
+        url = f"{DEFECTDOJO_URL.rstrip('/')}/api/v2/findings/"
+        headers = {
+            "Authorization": f"Token {DEFECTDOJO_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "title": f"{finding.get('type')} on {finding.get('url')}",
+            "description": f"Detail: {finding.get('detail')}\nConfidence: {finding.get('confidence')}",
+            "severity": finding.get('severity').capitalize(),
+            "active": True,
+            "verified": finding.get('verified', False),
+            "vuln_type": finding.get('type')
+        }
+        requests.post(url, headers=headers, json=data, timeout=5)
+    except: pass
+
+def send_telegram_alert(finding):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        msg = (f"🚨 <b>{finding.get('severity')} Vulnerability Found!</b>\n"
+               f"<b>Type:</b> {finding.get('type')}\n"
+               f"<b>URL:</b> {finding.get('url')}\n"
+               f"<b>Detail:</b> {finding.get('detail')}")
+        keyboard = {
+            "inline_keyboard": [[
+                {"text": "✅ Confirm", "callback_data": f"confirm_{finding.get('type')}"},
+                {"text": "❌ False Positive", "callback_data": f"fp_{finding.get('type')}"}
+            ]]
+        }
+        data = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": msg,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps(keyboard)
+        }
+        requests.post(url, json=data, timeout=5)
+    except: pass
+
+def send_slack_webhook(finding):
+    if not SLACK_WEBHOOK_URL or "your_" in SLACK_WEBHOOK_URL: return
+    try:
+        msg = f"🚨 *{finding.get('severity')} Vulnerability Found!*\n*Type:* {finding.get('type')}\n*URL:* {finding.get('url')}\n*Detail:* {finding.get('detail')}"
+        requests.post(SLACK_WEBHOOK_URL, json={"text": msg}, timeout=5)
+    except: pass
+
+def create_jira_ticket(finding):
+    if not JIRA_URL or not JIRA_API_TOKEN or "your_" in JIRA_API_TOKEN: return
+    try:
+        url = f"{JIRA_URL.rstrip('/')}/rest/api/2/issue"
+        auth = (JIRA_EMAIL, JIRA_API_TOKEN)
+        data = {
+            "fields": {
+                "project": {"key": JIRA_PROJECT_KEY},
+                "summary": f"[{finding.get('severity')}] {finding.get('type')} on {finding.get('url')}",
+                "description": f"Vulnerability Details:\n\nType: {finding.get('type')}\nURL: {finding.get('url')}\nDetail: {finding.get('detail')}\nConfidence: {finding.get('confidence')}",
+                "issuetype": {"name": "Bug"}
+            }
+        }
+        requests.post(url, json=data, auth=auth, timeout=5)
+    except: pass
 
 def create_notion_ticket(finding):
     if not NOTION_API_KEY or "your_" in NOTION_API_KEY: return
@@ -476,7 +635,19 @@ def push_to_graph(finding):
 def ai_autonomous_exploit(url):
     if not GEMINI_API_KEY or "your_" in GEMINI_API_KEY: return None
     log(f"[*] Autonomous AI analyzing {url} for custom exploits...")
-    prompt = f"You are an autonomous AI hacker. Analyze this URL: {url}. Provide exactly 3 highly advanced, context-specific payload strings (separated by newlines) to inject into its parameters for RCE or advanced SQLi. Do not include any explanations, just the raw payloads."
+    
+    try:
+        from modules.payload_extractor import extract_payloads
+        import random
+        db = extract_payloads()
+        flat_payloads = []
+        for v in db.values(): flat_payloads.extend(v)
+        sample = random.sample(flat_payloads, min(20, len(flat_payloads))) if flat_payloads else []
+        payload_ctx = f"Reference these payloads: {', '.join(sample)}"
+    except Exception:
+        payload_ctx = ""
+
+    prompt = f"You are an autonomous AI hacker. Analyze this URL: {url}. Provide exactly 3 highly advanced, context-specific payload strings (separated by newlines) to inject into its parameters for RCE or advanced SQLi. {payload_ctx} Do not include any explanations, just the raw payloads."
     model = random.choice(MODELS)
     api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
     payload = {"contents": [{"parts":[{"text": prompt}]}]}
@@ -510,7 +681,7 @@ def generate_nuclei_template(finding):
     prompt = f"You are a security engineer writing a Nuclei YAML template.\nBased on this finding:\nType: {finding.get('type')}\nURL: {finding.get('url')}\nDetail: {finding.get('detail')}\n\nWrite a raw Nuclei YAML template. Do NOT use markdown code blocks."
     try:
         import time
-        yaml_content = _call_gemini_helper(prompt, GEMINI_API_KEY)
+        yaml_content = get_ai_response(prompt)
         if not yaml_content: return
         yaml_content = yaml_content.strip()
         if yaml_content.startswith("```yaml"): yaml_content = yaml_content[7:]
@@ -888,6 +1059,16 @@ def check_subfinder(domain):
         return [f"https://{x.strip()}" for x in r.stdout.splitlines() if x.strip()]
     except: return []
 
+def check_wayback_machine(domain):
+    try:
+        url = f"http://web.archive.org/cdx/search/cdx?url=*.{domain}/*&output=json&fl=original&collapse=urlkey&limit=500"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if len(data) > 1:
+            return [row[0] for row in data[1:]]
+    except: pass
+    return []
+
 def check_gau(domain):
     bin_path = get_bin("gau")
     if not bin_path: return []
@@ -951,6 +1132,17 @@ def check_js_secrets(url):
     except: pass
     return findings if findings else None
 
+def check_tech_stack_routing(url):
+    try:
+        r = requests.get(url, headers=get_stealth_headers(), timeout=5, verify=False)
+        techs = []
+        text_lower = r.text.lower()
+        if "wp-content" in text_lower or "wordpress" in text_lower: techs.append("WordPress")
+        if "react" in text_lower or "data-reactroot" in text_lower: techs.append("React")
+        if "x-powered-by" in r.headers: techs.append(r.headers["x-powered-by"])
+        return techs
+    except: return []
+
 def check_shodan(domain):
     if not SHODAN_API_KEY or "your_" in SHODAN_API_KEY: return []
     findings = []
@@ -991,9 +1183,28 @@ def scan_target_fast(handle, target_data):
             if subs: log(f"  [+] Subfinder found {len(subs)} subdomains")
             urls = list(set(urls + subs))
             
+            # Dynamic Subdomain Alteration (Altdns / DNSGen logic)
+            try:
+                log(f"  [*] Generating subdomain permutations for {len(subs)} subdomains...")
+                perms = []
+                prefixes = ["dev-", "staging-", "test-", "api-v2-", "admin-"]
+                for s in subs:
+                    h = urlparse(s).hostname
+                    if h:
+                        for p in prefixes:
+                            perms.append(f"https://{p}{h}")
+                if perms:
+                    urls = list(set(urls + perms))
+                    log(f"  [+] Added {len(perms)} permutation guesses to scope")
+            except: pass
+            
             gu = check_gau(base_domain)
             if gu: log(f"  [+] GAU found {len(gu)} historical URLs")
             urls = list(set(urls + gu))
+            
+            wayback = check_wayback_machine(base_domain)
+            if wayback: log(f"  [+] Wayback Machine found {len(wayback)} historical URLs")
+            urls = list(set(urls + wayback))
             
             # STRICT SCOPE FILTERING
             if scope_mgr:
@@ -1038,6 +1249,12 @@ def scan_target_fast(handle, target_data):
         
         bases = list(set(f"{urlparse(u).scheme}://{urlparse(u).hostname}" for u in urls))[:5]
         for b in bases:
+            techs = check_tech_stack_routing(b)
+            if techs:
+                log(f"  [+] Tech Stack Detected for {b}: {', '.join(techs)}")
+                if "React" in techs:
+                    log(f"      -> 🚀 Routing {b} explicitly to Headless SPA analyzer")
+            
             try:
                 rand_path = f"/this-does-not-exist-{random.randint(10000, 99999)}"
                 b_resp = requests.get(f"{b}{rand_path}", headers=get_stealth_headers(), timeout=3, verify=False)
@@ -1062,6 +1279,8 @@ def scan_target_fast(handle, target_data):
             # === NEW: Awesome Bug Bounty Tools — Full Scanner Suite ===
             if SCANNERS_LOADED:
                 # Exploitation scanners
+                tasks.append(executor.submit(check_hardcoded_payloads, b))
+                tasks.append(executor.submit(run_cve_scans, b))
                 tasks.append(executor.submit(check_api_versioning, b))
                 tasks.append(executor.submit(check_rate_limit, b))
                 tasks.append(executor.submit(check_js_analyzer, b))
@@ -1441,8 +1660,12 @@ def main():
                     log(f"⚠️ WARNING: {f.get('type')} has {f.get('estimated_duplicate_risk')} duplicate risk. Verify before submitting!")
                 
                 send_discord_webhook(f)
+                send_telegram_alert(f)
+                send_slack_webhook(f)
                 generate_ai_report(f)
                 create_notion_ticket(f)
+                create_defectdojo_finding(f)
+                create_jira_ticket(f)
                 prior_reports = push_to_graph(f)
                 if prior_reports > 0:
                     f["estimated_duplicate_risk"] = "VERY HIGH"
@@ -1470,6 +1693,17 @@ def main():
         
     log(f"Finished! {new_count} NEW, {verified_count} AI-VERIFIED, {triaged_count} AI-TRIAGED "
         f"({dropped_by_triage} false positives dropped). Saved to {RESULTS_DIR}")
+    backup_artifacts_to_git()
+
+def backup_artifacts_to_git():
+    if not GITHUB_BACKUP_REPO: return
+    log("[*] Backing up AI-generated Zero-Day PoCs to Git...")
+    try:
+        import subprocess
+        subprocess.run(["git", "add", "reports/poc/", "custom-templates/"], capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Auto-backup of AI-generated artifacts"], capture_output=True)
+        subprocess.run(["git", "push", "origin", "main"], capture_output=True)
+    except: pass
 
 if __name__ == "__main__":
     import argparse
