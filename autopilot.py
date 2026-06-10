@@ -1419,8 +1419,17 @@ def scan_target_fast(handle, target_data, args=None):
                         passes = args.google_sso_passes.split(",")
                         if len(emails) == 2 and len(passes) == 2:
                             log(f"[*] Dynamically grabbing Google SSO session for {handle}...")
-                            # Attempt to auth on the first URL we found for this program
-                            login_url = target_data["urls"][0] if target_data.get("urls") else f"https://{handle}.com/login"
+                            # Search for a legitimate login URL instead of blindly picking the first one
+                            login_url = None
+                            for u in target_data.get("urls", []):
+                                u_lower = u.lower()
+                                if any(x in u_lower for x in ["login", "signin", "auth", "account", "sso"]):
+                                    login_url = u
+                                    break
+                            
+                            if not login_url:
+                                login_url = f"https://{handle}.com/login"
+                                
                             domain_creds = get_sso_credentials(login_url, emails[0], passes[0], emails[1], passes[1])
                             # Cache it in memory so we don't auth twice
                             IDOR_CREDENTIALS[handle] = domain_creds

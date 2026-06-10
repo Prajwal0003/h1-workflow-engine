@@ -49,9 +49,27 @@ def safe_post(url, timeout=5, **kwargs):
         return None
 
 def get_bin(name):
+    import shutil
     ext = ".exe" if platform.system().lower() == "windows" else ""
-    bin_path = Path("tools") / name / f"{name}{ext}"
-    return str(bin_path) if bin_path.exists() else None
+    
+    # Check multiple possible locations
+    possible_paths = [
+        Path("tools") / name / f"{name}{ext}",
+        Path("tools") / f"{name}{ext}",
+        Path("data") / f"{name}_bin" / f"{name}{ext}",
+        Path(f"{name}{ext}")
+    ]
+    
+    for p in possible_paths:
+        if p.exists():
+            return str(p.absolute())
+            
+    # Fallback to system PATH
+    sys_path = shutil.which(name)
+    if sys_path:
+        return sys_path
+        
+    return None
 
 def run_bin(name, args, timeout=30, input_data=None):
     bin_path = get_bin(name)
