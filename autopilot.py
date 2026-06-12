@@ -544,7 +544,7 @@ class ScopeManager:
             except:
                 continue
                 
-            instruction = s.get("instruction", "").lower()
+            instruction = (s.get("instruction") or "").lower()
             eligible = s.get("eligible_for_submission", True)
             
             is_oos = not eligible or "out of scope" in instruction or "do not test" in instruction or "out-of-scope" in instruction or "not accepted" in instruction
@@ -1419,7 +1419,15 @@ def scan_target_fast(handle, target_data, args=None):
             # === Feature 3: Dual-Session IDOR Scanning ===
             if FEATURES_LOADED:
                 # Check if we have credentials for this specific program/domain
-                domain_creds = IDOR_CREDENTIALS.get(handle) or IDOR_CREDENTIALS.get("default")
+                domain_creds = IDOR_CREDENTIALS.get(handle)
+                if not domain_creds:
+                    # Fuzzy match keys in case it was saved under a subdomain like app.asana.com
+                    for k, v in IDOR_CREDENTIALS.items():
+                        if handle in k or k in handle:
+                            domain_creds = v
+                            break
+                if not domain_creds:
+                    domain_creds = IDOR_CREDENTIALS.get("default")
                 
                 # NEW: If credentials are not present but user wants auto-auth
                 if not domain_creds and args and hasattr(args, 'google_sso_emails') and args.google_sso_emails:
@@ -1437,12 +1445,19 @@ def scan_target_fast(handle, target_data, args=None):
                                     login_url = u
                                     break
                             
-                            if not login_url:
-                                login_url = f"https://{handle}.com/login"
-                                
-                            domain_creds = get_sso_credentials(login_url, emails[0], passes[0], emails[1], passes[1])
-                            # Cache it in memory so we don't auth twice
-                            IDOR_CREDENTIALS[handle] = domain_creds
+                            if handle == "bendigobank":
+                                log(f"[*] Skipping Auto Google SSO for {handle} (VDP / Not Applicable)")
+                            else:
+                                if not login_url:
+                                    # Known program-specific login URLs
+                                    KNOWN_LOGIN_URLS = {
+                                        "asana": "https://app.asana.com/-/login",
+                                    }
+                                    login_url = KNOWN_LOGIN_URLS.get(handle, f"https://app.{handle}.com/login")
+                                    
+                                domain_creds = get_sso_credentials(login_url, emails[0], passes[0], emails[1], passes[1])
+                                # Cache it in memory so we don't auth twice
+                                IDOR_CREDENTIALS[handle] = domain_creds
                     except Exception as e:
                         log(f"[-] Auto Google SSO failed for {handle}: {e}")
 

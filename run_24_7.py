@@ -9,11 +9,23 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', hand
     logging.StreamHandler(sys.stdout)
 ])
 
-def run_autopilot(sso_emails=None, sso_passes=None):
-    logging.info("Starting 24/7 Bug Bounty Autopilot Scan...")
+def discover_fresh_targets(h1_count=10, bc_count=10):
+    """Pull 10 targets from HackerOne + 10 from Bugcrowd using target discovery module."""
+    logging.info(f"🔍 Discovering {h1_count} H1 + {bc_count} BC targets...")
     try:
-        # Run autopilot targeting dynamic targets, which expands surface automatically.
-        cmd = ["python", "autopilot.py", "--dynamic"]
+        from modules.target_discovery import discover_targets
+        handles = discover_targets(h1_count=h1_count, bc_count=bc_count)
+        logging.info(f"✅ Discovered {len(handles)} fresh targets: {handles}")
+        return handles
+    except Exception as e:
+        logging.error(f"Target discovery failed: {e}")
+        return []
+
+def run_autopilot(target, sso_emails=None, sso_passes=None):
+    logging.info(f"Starting 24/7 Bug Bounty Autopilot Scan on target: {target}...")
+    try:
+        # Run autopilot targeting a specific program from data/selected_targets/
+        cmd = ["python", "autopilot.py", target]
         if sso_emails and sso_passes:
             cmd.extend(["--google-sso-emails", sso_emails, "--google-sso-passes", sso_passes])
         
@@ -69,16 +81,65 @@ if __name__ == "__main__":
             sso_emails = sys.argv[i+1]
         elif sys.argv[i] == "--google-sso-passes" and i + 1 < len(sys.argv):
             sso_passes = sys.argv[i+1]
+    
+    # Fallback: read SSO creds from .env if not provided via CLI
+    if not sso_emails or not sso_passes:
+        from pathlib import Path
+        env_file = Path(".env")
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if line.startswith("GOOGLE_SSO_EMAILS="):
+                    sso_emails = line.split("=", 1)[1].strip().strip('"').strip("'")
+                elif line.startswith("GOOGLE_SSO_PASSWORDS="):
+                    sso_passes = line.split("=", 1)[1].strip().strip('"').strip("'")
             
     logging.info(f"Starting Daemon. SSO Emails configured: {'Yes' if sso_emails else 'No'}")
         
+    cycle = 0
     while True:
+        cycle += 1
+        logging.info(f"{'='*60}")
+        logging.info(f"🔄 CYCLE {cycle} — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logging.info(f"{'='*60}")
+        
+        # Run support modules first
         run_tool_updater()
         run_zero_day_watcher()
         run_burp_analyzer()
         run_github_api_hunter()
-        run_autopilot(sso_emails, sso_passes)
         
-        # Run every 60 minutes (3600 seconds)
-        logging.info("Next scan will start in 60 minutes. Process is alive 24/7/365. Do not close this terminal.")
+        # --- MULTI-TARGET DISCOVERY ---
+        # Pull 10 from HackerOne + 10 from Bugcrowd
+        targets = discover_fresh_targets(h1_count=10, bc_count=10)
+        
+        if not targets:
+            logging.warning("⚠️  No targets discovered this cycle. Retrying in 30 minutes.")
+            time.sleep(1800)
+            continue
+        
+        logging.info(f"🎯 Scanning {len(targets)} targets this cycle:")
+        for i, t in enumerate(targets, 1):
+            logging.info(f"   {i:2d}. {t}")
+        
+        # Scan each target
+        for idx, target in enumerate(targets, 1):
+            logging.info(f"")
+            logging.info(f"{'─'*50}")
+            logging.info(f"🎯 [{idx}/{len(targets)}] Scanning: {target}")
+            logging.info(f"{'─'*50}")
+            run_autopilot(target=target, sso_emails=sso_emails, sso_passes=sso_passes)
+            
+            # Brief cooldown between targets to avoid burning IPs
+            if idx < len(targets):
+                cooldown = 30
+                logging.info(f"⏳ Cooling down {cooldown}s before next target...")
+                time.sleep(cooldown)
+        
+        # Cycle complete
+        logging.info(f"")
+        logging.info(f"{'='*60}")
+        logging.info(f"✅ CYCLE {cycle} COMPLETE — Scanned {len(targets)} targets")
+        logging.info(f"Next cycle (fresh targets) starts in 60 minutes.")
+        logging.info(f"Process is alive 24/7/365. Do not close this terminal.")
+        logging.info(f"{'='*60}")
         time.sleep(3600)

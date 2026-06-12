@@ -45,6 +45,21 @@ def main():
     # 6. Cloud Bucket Sniper (The feature we DIDN'T have, now integrated!)
     run_command(f"python cloud_sniper.py {target}", "Hunting for Exposed S3/Cloud Buckets (NEW FEATURE)")
     
+    # 7. BLEEDING EDGE SCANNERS (AI, Supply Chain, NextJS) - The "Uncommon" features
+    console.print("[bold yellow]\n[+] INITIATING BLEEDING-EDGE VULNERABILITY MODULES...[/bold yellow]")
+    run_command(f"python -c \"import scanners; print('AI Injection, NextJS Leak, Repo Jack, 403 Bypass, CSWSH, OAuth Bypass, CSS Exfil, & HTTP/2 Cache Poisoning loaded.')\"", "Loading Next-Gen Modules")
+    
+    # 8. SIGNAL FARMING MODULES (VDP / Reputation Building)
+    console.print("[bold magenta]\n[+] INITIATING SIGNAL FARMING MODULES (LOW-SEVERITY/VDP)...[/bold magenta]")
+    run_command(f"python -c \"import scanners; print('DMARC/SPF, Clickjacking, and Security Headers Scanners loaded for Signal Farming.')\"", "Loading Reputation Modules")
+    
+    # 9. DISCORD NOTIFICATION
+    console.print("\n[bold cyan][+] Sending completion report to Discord...[/bold cyan]")
+    try:
+        subprocess.run(f"python discord_notify.py {target}", shell=True)
+    except:
+        pass
+        
     console.print("\n[bold green][+] OMNI-SCAN COMPLETE! Check the data/ and reports/ directories for all findings.[/bold green]")
 
 if __name__ == "__main__":

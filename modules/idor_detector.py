@@ -349,9 +349,15 @@ class DualSessionIDORDetector:
 def check_idor_dual_session(base_url, program="unknown", credentials=None):
     """
     Convenience wrapper for autopilot integration.
-    Expects credentials dict with user_a and user_b sub-dicts.
-
-    Example credentials config (in .env or passed directly):
+    Supports two modes:
+    
+    Mode 1 — Pre-extracted SSO cookies (from google_sso_automator):
+    {
+        "user_a_cookie": "session=abc123; ...",
+        "user_b_cookie": "session=xyz789; ..."
+    }
+    
+    Mode 2 — Username/password login:
     {
         "user_a": {"username": "testuser1", "password": "pass1"},
         "user_b": {"username": "testuser2", "password": "pass2"},
@@ -363,6 +369,39 @@ def check_idor_dual_session(base_url, program="unknown", credentials=None):
     if not credentials:
         return []
 
+    # Mode 1: Pre-extracted cookies from SSO
+    if credentials.get("user_a_cookie") and credentials.get("user_b_cookie"):
+        print(f"  [IDOR Detector] Using pre-extracted SSO cookies for {base_url}", flush=True)
+        detector = DualSessionIDORDetector(
+            base_url=base_url,
+            credentials_a={},
+            credentials_b={},
+        )
+        # Inject cookies directly into sessions
+        for cookie_pair in credentials["user_a_cookie"].split("; "):
+            if "=" in cookie_pair:
+                name, value = cookie_pair.split("=", 1)
+                detector.session_a.cookies.set(name.strip(), value.strip())
+        for cookie_pair in credentials["user_b_cookie"].split("; "):
+            if "=" in cookie_pair:
+                name, value = cookie_pair.split("=", 1)
+                detector.session_b.cookies.set(name.strip(), value.strip())
+        
+        detector._log(f"[OK] User A authenticated ({len(detector.session_a.cookies)} cookies from SSO)")
+        detector._log(f"[OK] User B authenticated ({len(detector.session_b.cookies)} cookies from SSO)")
+        
+        # Skip authenticate(), go straight to discovery + cross-test
+        detector.discover_endpoints()
+        if not detector.discovered_endpoints:
+            detector._log("No API endpoints discovered — skipping cross-session test")
+            return []
+        detector.cross_session_test()
+        for f in detector.findings:
+            f["program"] = program
+        detector._log(f"IDOR scan complete: {len(detector.findings)} findings")
+        return detector.findings
+
+    # Mode 2: Username/password login flow
     detector = DualSessionIDORDetector(
         base_url=base_url,
         credentials_a=credentials.get("user_a", {}),
@@ -373,3 +412,4 @@ def check_idor_dual_session(base_url, program="unknown", credentials=None):
         token_field=credentials.get("token_field", "session"),
     )
     return detector.run(program=program)
+

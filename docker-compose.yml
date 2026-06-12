@@ -3,6 +3,7 @@ version: '3.8'
 services:
   autopilot:
     build: .
+    command: ["python", "run_24_7.py"]
     volumes:
       - ./data:/app/data
       - ./reports:/app/reports
@@ -11,6 +12,18 @@ services:
     restart: unless-stopped
     depends_on:
       - neo4j
+      - freellmapi
+
+  freellmapi:
+    image: ghcr.io/tashfeenahmed/freellmapi:latest
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./data/freellmapi:/app/server/data
+    environment:
+      - ENCRYPTION_KEY=${FREELLMAPI_ENCRYPTION_KEY:-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855}
+      - PORT=3001
+    restart: unless-stopped
 
   neo4j:
     image: neo4j:latest

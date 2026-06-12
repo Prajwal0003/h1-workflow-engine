@@ -2,6 +2,7 @@ import requests
 import json
 import os
 import subprocess
+import shutil
 import logging
 from pathlib import Path
 
@@ -45,7 +46,13 @@ def hunt_for_new_tools():
     if known_tools_file.exists():
         try: known_tools = json.loads(known_tools_file.read_text())
         except: pass
-        
+
+    has_git = shutil.which("git") is not None
+    has_go = shutil.which("go") is not None
+
+    if not has_git:
+        logging.warning("[!] Git not found in PATH — skipping tool cloning")
+
     new_tools = find_new_github_tools()
     
     for tool in new_tools:
@@ -56,13 +63,25 @@ def hunt_for_new_tools():
         if repo_name not in known_tools:
             logging.info(f"[*] 🚨 FOUND NEW TOOL: {repo_name}")
             
-            # 1. Clone the tool
+            # 1. Clone the tool (skip if git not available)
             tool_dir = Path("tools") / repo_name
-            if not tool_dir.exists():
-                subprocess.run(["git", "clone", repo_url, str(tool_dir)], capture_output=True)
+            if not tool_dir.exists() and has_git:
+                try:
+                    subprocess.run(["git", "clone", "--depth", "1", repo_url, str(tool_dir)],
+                                   capture_output=True, timeout=60)
+                except Exception as e:
+                    logging.warning(f"[!] Failed to clone {repo_name}: {e}")
+                    continue
                 
-            # 2. Build Go tool if applicable
-            subprocess.run(["go", "build", "-o", f"{repo_name}.exe"], cwd=str(tool_dir), capture_output=True)
+            # 2. Build Go tool if applicable (skip if go not available)
+            if has_go and tool_dir.exists():
+                try:
+                    subprocess.run(["go", "build", "-o", f"{repo_name}.exe"],
+                                   cwd=str(tool_dir), capture_output=True, timeout=120)
+                except Exception as e:
+                    logging.warning(f"[!] Failed to build {repo_name}: {e}")
+            elif not has_go:
+                logging.info(f"[*] Go not installed — skipping build for {repo_name}")
             
             # 3. Use AI to write a wrapper
             prompt = f"""You are an elite Python developer building a bug bounty framework.
@@ -74,10 +93,16 @@ Write a Python wrapper function that takes a 'target_url' string, runs the '{rep
 Only return the raw python code. No markdown. Define a function named `run_{repo_name.replace('-', '_')}(target_url)`.
 Use `from scanners.utils import get_bin, run_bin` to execute it safely.
 """
-            python_wrapper = get_groq_response(prompt)
+            try:
+                python_wrapper = get_groq_response(prompt)
+            except Exception as e:
+                logging.warning(f"[!] AI wrapper generation failed for {repo_name}: {e}")
+                python_wrapper = None
             
             if python_wrapper and "def run_" in python_wrapper:
-                wrapper_path = Path("scanners/custom_tools") / f"{repo_name.replace('-', '_')}.py"
+                wrapper_dir = Path("scanners/custom_tools")
+                wrapper_dir.mkdir(parents=True, exist_ok=True)
+                wrapper_path = wrapper_dir / f"{repo_name.replace('-', '_')}.py"
                 wrapper_path.write_text(python_wrapper)
                 
                 known_tools.append(repo_name)
@@ -86,5 +111,25 @@ Use `from scanners.utils import get_bin, run_bin` to execute it safely.
     known_tools_file.parent.mkdir(parents=True, exist_ok=True)
     known_tools_file.write_text(json.dumps(known_tools))
 
+def update_wordlists():
+    logging.info("[*] Updating wordlists from SecLists...")
+    wordlist_dir = Path("wordlists")
+    wordlist_dir.mkdir(exist_ok=True)
+    
+    urls = {
+        "common.txt": "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt",
+        "lfi-payloads.txt": "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Fuzzing/LFI/LFI-gracefulsecurity-linux.txt",
+        "sqli-payloads.txt": "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Fuzzing/SQLi/Generic-SQLi.txt"
+    }
+    
+    for filename, url in urls.items():
+        try:
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                (wordlist_dir / filename).write_text(r.text)
+                logging.info(f"  [+] Updated {filename}")
+        except: pass
+
 if __name__ == "__main__":
+    update_wordlists()
     hunt_for_new_tools()

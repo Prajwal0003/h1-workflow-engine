@@ -33,6 +33,17 @@ from .js_analyzer import check_js_analyzer
 from .api_schema import check_api_schema
 from .mass_assignment import check_mass_assignment
 from .cache_deception import check_cache_deception
+from .llm_prompt_injection import check_llm_prompt_injection
+from .nextjs_analyzer import check_nextjs_vulnerabilities
+from .repo_jacking import check_repo_jacking
+from .bauth_bypass import check_403_bypass
+from .websocket_cswsh import check_cswsh
+from .oauth_redirect_bypass import check_oauth_redirect_bypass
+from .css_exfiltration import check_css_exfiltration
+from .h2_cache_poison import check_h2_cache_poisoning
+from .dmarc_spf_scanner import check_dmarc_spf
+from .clickjacking import check_clickjacking
+from .security_headers import check_security_headers
 
 __all__ = [
     "check_xss", "check_dom_xss", "check_ssrf", "check_ssti", "check_csrf",
@@ -43,5 +54,9 @@ __all__ = [
     "discover_links_and_js", "check_advanced_secrets", "check_insecure_deserialization",
     "check_postmessage", "generate_permutations", "check_command_injection",
     "check_idor_advanced", "check_api_versioning", "check_rate_limit",
-    "check_js_analyzer", "check_api_schema", "check_mass_assignment", "check_cache_deception"
+    "check_js_analyzer", "check_api_schema", "check_mass_assignment", "check_cache_deception",
+    "check_llm_prompt_injection", "check_nextjs_vulnerabilities", "check_repo_jacking",
+    "check_403_bypass", "check_cswsh", "check_oauth_redirect_bypass",
+    "check_css_exfiltration", "check_h2_cache_poisoning",
+    "check_dmarc_spf", "check_clickjacking", "check_security_headers"
 ]

@@ -17,7 +17,7 @@ concurrency:
 jobs:
   recon-and-scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 420
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
           else
             python autopilot.py --dynamic
           fi
-        timeout-minutes: 60
+        timeout-minutes: 360
 
       - name: Generate HTML Dashboard Report
         if: always()

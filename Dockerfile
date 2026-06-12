@@ -8,8 +8,13 @@ RUN apt-get update && apt-get install -y \
     libpcap-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies including playwright and neo4j
-RUN pip install requests urllib3 playwright neo4j flask python-dotenv rich
+# Install Node.js for OpenCode MCP
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get update && apt-get install -y nodejs && \
+    npm install -g opencode-ai
+
+# Install Python dependencies including playwright, neo4j, and cai-framework
+RUN pip install requests urllib3 playwright neo4j flask python-dotenv rich cai-framework
 
 # Install Playwright for headless SPA crawling
 RUN playwright install-deps
@@ -32,5 +37,5 @@ RUN python setup_tools.py
 RUN useradd -m scanner && chown -R scanner /app
 USER scanner
 
-# Command to run the scanner by default
-CMD ["python", "autopilot.py", "--dynamic"]
+# Command to run the scanner by default (now using the 24/7 daemon)
+CMD ["python", "run_24_7.py"]
