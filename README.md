@@ -1,80 +1,76 @@
-# 🛡️ Aegis-Auto | The Autonomous AI Bug Bounty Platform
+# H1-Workflow | Bug Bounty Automation Engine
 
-<div align="center">
-  <img src="https://img.shields.io/badge/Python-3.11-blue.svg?style=for-the-badge" alt="Python">
-  <img src="https://img.shields.io/badge/Docker-Supported-2496ED.svg?style=for-the-badge" alt="Docker">
-  <img src="https://img.shields.io/badge/AI-Gemini%20Integrated-orange.svg?style=for-the-badge" alt="AI">
-  <img src="https://img.shields.io/badge/Neo4j-Graph%20DB-4183C4.svg?style=for-the-badge" alt="GraphDB">
-  <img src="https://img.shields.io/badge/Playwright-SPA%20Crawler-2EAD33.svg?style=for-the-badge" alt="Playwright">
-</div>
+A comprehensive suite of automation scripts, reconnaissance tools, and custom vulnerability scanners designed to streamline the bug bounty workflow, with a particular focus on HackerOne programs and continuous assessment.
 
-<br>
+## 🚀 Core Components
 
-Aegis-Auto is a **commercial-grade, serverless DevSecOps vulnerability scanner** engineered for the modern Bug Bounty Hunter. It leverages AI-driven exploitation, Graph Database asset tracking, Headless SPA crawling, and Telegram C2 for continuous, autonomous vulnerability discovery.
+### 1. 🎯 HackerOne Workflow CLI (`h1_workflow.py`)
+A unified command-line interface to interact directly with HackerOne.
+- **Search & Pick:** Discover and interactively select programs (`search`, `pick`).
+- **Scope Extraction:** Automatically parse and structure in-scope assets (`scope`).
+- **Disclosed Reports:** Review publicly disclosed bugs to understand program tendencies (`disclosed`).
+- **Full Recon Pipeline:** Chain scope extraction and reconnaissance in overnight modes (`pipeline`).
 
----
+### 2. 🤖 Continuous Assessment (Autopilot)
+- **`autopilot.py` / `run_24_7.py`:** Autonomous 24/7 scanning engines that monitor assets, parse out-of-scope items, and systematically launch deep probes.
+- **`c2_bot.py` & Discord Integrations:** Remote command and control via Telegram, coupled with real-time alerting to Discord (`discord_notify.py`, `send_discord_changes.py`).
 
-## ✨ Enterprise Features
+### 3. 🕸️ Reconnaissance & Target Discovery
+- **Mass Recon:** Automated subdomain enumeration and port scanning (`mass_recon.py`, `visual_recon.py`).
+- **Target Analysis:** Identify high-value targets and analyze tech stacks (`analyze_targets.py`, `find_targets.py`).
+- **Secret & Key Hunting:** Scan for exposed secrets and validate Google Maps keys (`check_secrets.py`, `verify_gmaps_key.py`, `find_key_origin.py`).
 
-- **🧠 Autonomous AI Hacker:** Utilizes Gemini AI to synthesize context-specific zero-day payloads (RCE/SQLi) dynamically during runtime.
-- **📱 Telegram Command & Control (C2):** Fully remote-controllable scanning engine via a secure Telegram Bot interface.
-- **🕸️ Headless SPA Fuzzing:** Implements Playwright Chromium engines to render React/Angular apps and intercept hidden `POST/PUT` API state changes.
-- **🌐 Graph Database OSINT:** Maps targets (Subdomains → IPs → Open Ports → Vulns) visually via Neo4j Graph queries.
-- **📡 Blind OOB Detection:** Integrated Interactsh for asynchronous Blind SSRF and XSS callback hunting.
-- **🤖 Self-Learning Engine:** Automatically translates novel AI-discovered vulnerabilities into YAML Nuclei Templates for future scans.
-- **🎫 DevSecOps Integrations:** Automated Notion Kanban ticketing and Discord Webhooks for real-time alerting.
+### 4. 🔬 Target-Specific Scanners
+Customized deep-dive tools built for specific bug bounty programs or technology stacks:
+- **Recorded Future:** `mega_rf_scanner.py`, `run_recorded_future.py`
+- **LaunchDarkly:** `deep_dive_launchdarkly.py`, `run_launchdarkly.py`
+- **Vimeo:** `vimeo_recon.py`, `vimeo_idor_test.py`
+- **Priceline / Stripchat:** `fetch_priceline.py`, `stripchat_recon.py`
 
----
+### 5. 🛡️ Vulnerability Verification
+Dedicated scripts to validate findings and eliminate false positives before reporting:
+- **SQLi:** `verify_sqli.py`
+- **CORS / Open Redirects:** `verify_cors.py`, `verify_open_redirects.py`
+- **Subdomain Takeover:** `verify_takeover.py`
+- **SSTI:** `verify_ssti_insightly.py`
 
-## 🏗️ System Architecture
+### 6. 🛠️ Tooling & Infrastructure
+- **Tool Management:** Automatically install and update external dependencies like `naabu`, `subfinder`, `katana`, etc. (`setup_tools.py`, `install_tools.sh`, `modules/tool_updater.py`).
+- **AI Integrations:** Utilities for leveraging LLMs to parse context or find vulnerabilities (`fix_groq_to_gemini.py`, `test_ai.py`, `scanners/llm_prompt_injection.py`).
+- **Reporting:** Generate PDF reports for triagers (`generate_pdf_report.py`, `generate_report.py`).
 
-```mermaid
-graph TD;
-    A[Telegram C2 Bot] -->|/scan command| B(Autopilot Engine);
-    B --> C{Recon Module};
-    C -->|Subfinder & GAU| D[Asset Expansion];
-    C -->|Shodan API| E[Origin IP Hunter];
-    B --> F{Exploit Module};
-    F -->|Playwright| G[Headless SPA Sniffing];
-    F -->|Gemini AI| H[AI Payload Injection];
-    F -->|Interactsh| I[Blind SSRF Tracking];
-    B --> J{Reporting Module};
-    J -->|Cypher Queries| K[(Neo4j Graph DB)];
-    J -->|API| L[Notion Triage Board];
-    J -->|Webhook| M[Discord Alerts];
-```
+## ⚙️ Quick Start
 
----
+### Prerequisites
+Make sure you have Python 3.11+ installed. Ensure you configure your `.env` based on `.env.example`.
 
-## 🚀 Quick Start (Dockerized)
-
-Aegis-Auto comes with a stunning **Web Configuration Portal** to safely inject your API keys into the environment without touching any code.
-
-### 1. Clone & Spin up the Docker stack
 ```bash
-git clone https://github.com/yourusername/aegis-auto.git
-cd aegis-auto
-docker-compose up -d
+# Clone the repository
+git clone https://github.com/Prajwal0003/h1-workflow-engine.git
+cd h1-workflow-engine
+
+# Setup environment
+python -m venv venv
+source venv/bin/activate  # Or `venv\Scripts\activate` on Windows
+pip install -r requirements.txt
+
+# Install external bug bounty tools
+./install_tools.sh 
+# OR
+python setup_tools.py
 ```
 
-### 2. Access the Configuration Portal
-Navigate to `http://localhost:5000` in your web browser. You will be greeted by a modern glassmorphism UI where you can securely input your Telegram, Gemini, Notion, and Shodan API keys. 
-
-Hitting **"Deploy Configuration 🚀"** automatically injects the secrets into the running pipeline containers.
-
-### 3. Trigger your first scan
-Message your Telegram Bot from your phone:
-```text
-/scan hackerone.com
-```
-Or run the scanner manually:
+### Usage Examples
 ```bash
-docker exec -it aegis-auto-autopilot-1 python autopilot.py
-```
+# Search HackerOne programs interactively
+python h1_workflow.py pick
 
-### 4. View your Graph Assets
-Navigate to `http://localhost:7474` to log into your Neo4j Database and explore your attack surface visually!
+# Run an automated deep dive on a specific program
+python h1_workflow.py pipeline <handle>
+
+# Start the continuous 24/7 autopilot scanner
+python run_24_7.py
+```
 
 ---
-
-*Disclaimer: This tool is built for authorized bug bounty hunting and ethical security research only. Ensure you have permission before scanning any target.*
+*Disclaimer: This repository is intended strictly for authorized, ethical bug bounty research. Do not use these tools on programs or targets where you do not have explicit permission to test.*
