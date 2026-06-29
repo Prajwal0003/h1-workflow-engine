@@ -49,15 +49,13 @@ Make sure you have Python 3.11+ installed. Ensure you configure your `.env` base
 git clone https://github.com/Prajwal0003/h1-workflow-engine.git
 cd h1-workflow-engine
 
-# Setup environment
-python -m venv venv
-source venv/bin/activate  # Or `venv\Scripts\activate` on Windows
-pip install -r requirements.txt
+# Run the automated setup script for your OS
+# For Windows:
+setup.bat
 
-# Install external bug bounty tools
-./install_tools.sh 
-# OR
-python setup_tools.py
+# For Linux / macOS:
+chmod +x setup.sh
+./setup.sh
 ```
 
 ### Usage Examples

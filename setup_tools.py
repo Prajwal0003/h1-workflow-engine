@@ -398,67 +398,12 @@ if __name__ == "__main__":
     install_git_tool("https://github.com/epinna/tplmap.git", "tplmap")
     install_git_tool("https://github.com/0xInfection/XSRFProbe.git", "xsrfprobe")
 
-def install_awesome_bugbounty_tools_mass():
-    print("\n--- Mass Cloning awesome-bugbounty-tools ---")
-    mass_dir = TOOLS_DIR / "awesome_mass"
-    mass_dir.mkdir(exist_ok=True)
-
-    print("[*] Fetching awesome-bugbounty-tools README...")
-    try:
-        url = "https://raw.githubusercontent.com/vavkamil/awesome-bugbounty-tools/master/README.md"
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req) as response:
-            content = response.read().decode('utf-8')
-
-        # Find all github repo links
-        repos = re.findall(r'https://github\.com/([\w\-]+)/([\w\-]+)', content)
-        # Remove duplicates while preserving order
-        unique_repos = list(dict.fromkeys(repos))
-
-        print(f"[*] Found {len(unique_repos)} potential tools to clone!")
-
-        # Clone all tools (no limit)
-        count = 0
-        for owner, repo in unique_repos:
-            if repo.lower() == "awesome-bugbounty-tools":
-                continue
-
-            repo_url = f"https://github.com/{owner}/{repo}.git"
-            dest = mass_dir / repo
-            if not dest.exists():
-                print(f"[*] Mass cloning {repo} ({count+1}/{len(unique_repos)})...")
-                subprocess.run(["git", "clone", "--depth", "1", repo_url, str(dest)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            count += 1
-
-        print(f"[+] Mass clone complete! Downloaded {count} tools.")
-    except Exception as e:
-        print(f"[-] Failed mass clone: {e}")
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("  AEGIS-AUTO — Full Arsenal Installer")
-    print("  Based on awesome-bugbounty-tools")
-    print("=" * 60)
-    os_name, arch_name, ext = get_platform_info()
-    print(f"[*] Detected OS: {os_name} | Arch: {arch_name}\n")
-
-    # Install main tools
-    install_nuclei(os_name, arch_name)
-    install_subfinder(os_name, arch_name)
-    install_httpx(os_name, arch_name)
-    install_ffuf(os_name, arch_name)
-    install_katana(os_name, arch_name)
-    
-    # Run mass clone
-    install_awesome_bugbounty_tools_mass()
-
-    # Get wordlists and configs
+    # === Wordlists and Configs ===
     download_wordlists()
     create_env_template()
 
     print("\n" + "=" * 60)
-    print("  [+] Full Arsenal Installed!")
+    print("  [+] Core Arsenal Installed!")
     print("  [+] Tools: tools/")
-    print("  [+] Mass Tools: tools/awesome_mass/")
     print("  [+] Wordlists: wordlists/")
     print("=" * 60)
