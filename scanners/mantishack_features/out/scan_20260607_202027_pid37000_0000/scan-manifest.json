@@ -1,0 +1,14 @@
+{
+  "agent": "auto_codesec",
+  "version": "2.0.0",
+  "repo_path": "C:\\Users\\prajw\\.openclaw\\workspace\\h1-workflow",
+  "timestamp_utc": "2026-06-07T14:50:40Z",
+  "input_hash": "015d79c5a4d574b119bf74c69c90f98f479df07081592712c2991d83fcf6fcec",
+  "policy_version": "v1",
+  "policy_groups": [
+    "auth",
+    "logging",
+    "security-audit"
+  ],
+  "parallel_scanning": true
+}

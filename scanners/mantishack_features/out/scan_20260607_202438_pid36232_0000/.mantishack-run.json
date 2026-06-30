@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "command": "scan",
+  "timestamp": "2026-06-07T14:54:38.376500+00:00",
+  "status": "failed",
+  "manifest": {
+    "schema": 1,
+    "source_control": {
+      "base_sha": "b65f36d3d6bba064dc34db58eeca78013debf38a",
+      "dirty": true,
+      "diff_sha256": "f07329d29be3416f1772fd185a7cf405cf08dd84155408153a21e77e0dd34f15"
+    },
+    "environment": {
+      "python": "3.12.10",
+      "os": "Windows",
+      "arch": "AMD64"
+    },
+    "target": {
+      "vcs": "git",
+      "commit": "b65f36d3d6bba064dc34db58eeca78013debf38a",
+      "dirty": true,
+      "branch": "master"
+    }
+  },
+  "extra": {
+    "error": "exit code 1"
+  },
+  "target_path": ".",
+  "end_timestamp": "2026-06-07T14:54:43.246640+00:00",
+  "duration_seconds": 4.9
+}

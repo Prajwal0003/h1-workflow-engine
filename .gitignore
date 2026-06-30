@@ -1,0 +1,12 @@
+.env
+data/
+__pycache__/
+*.pyc
+.venv/
+venv/
+tools/
+scratch/
+.output/
+reports/poc/
+scanners/mantishack_features/out/
+cookies*.txt

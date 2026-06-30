@@ -1,0 +1,10 @@
+.git
+.github
+__pycache__
+scratch
+data
+reports
+node_modules
+.vscode
+*.sqlite
+*.log

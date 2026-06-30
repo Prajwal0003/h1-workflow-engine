@@ -1,0 +1,41 @@
+# Vulnerability Report: Remote Code Execution (RCE) via Server-Side Template Injection (SSTI)
+
+## Target
+`https://chaitanyashelar409-ch10.4.213.214.70.nip.io`
+
+## Finding Status
+**CONFIRMED** - True Positive
+
+## Overview
+A critical Server-Side Template Injection (SSTI) vulnerability was discovered on the `/amortization` endpoint. The `term` GET parameter is insecurely concatenated directly into a Jinja2 template string before evaluation, which allows an authenticated attacker to break out of the intended logic and evaluate arbitrary Python expressions within the Jinja2 context.
+
+## Technical Details
+The vulnerability exists because the application constructs a Jinja2 `for` loop dynamically using the user-provided `term` parameter:
+```html
+{% for i in range(1, {term} + 1) %}
+```
+By passing a mathematical or conditional expression, the application evaluates the payload. For instance, setting `term=(1 if True else 0)` evaluates successfully and returns a 200 OK response with a single row in the amortization table.
+
+### Bypassing Restrictions (WAF/Filters)
+The application blocks the `{` and `}` characters, preventing traditional `{{ payload }}` SSTI payloads. However, since the injection point is already inside the `{% %}` block during the evaluation of the `range()` function, curly braces are not required. We can traverse the object graph using `config.__init__.__globals__` to access the Python `__builtins__` and the `__import__` function, allowing for arbitrary OS command execution.
+
+## Proof of Concept & Exploitation
+To achieve Remote Code Execution and extract the hidden flag, a blind data-extraction script was developed. The script exploits the application's row-count response to infer the output of shell commands byte-by-byte (Blind SSTI).
+
+**RCE Payload Example (Extracting length):**
+```python
+term = (1 if config.__init__.__globals__['__builtins__']['__import__']('os').popen('cat *flag*').read().__len__() == 38 else 0)
+```
+*When the condition evaluates to `True`, the server returns 1 row (Status 200). If `False`, it returns 0 rows.*
+
+## Hidden Flag Extracted
+Using a binary search algorithm over the output of `cat *flag*`, the following flag was successfully extracted from the server:
+
+**Flag:** `{7e2f9a4c-1d8b-5c3e-9f6a-4b8d2e1c7a5f}`
+
+## Impact
+This vulnerability allows a malicious actor to achieve full Remote Code Execution (RCE) on the underlying server. An attacker could extract sensitive data (such as the database, session signing keys, or flags), pivot into internal networks, or completely compromise the hosting environment.
+
+## Remediation
+- **Sanitize Input:** Ensure that the `term` parameter is strictly cast to an integer in the application controller (e.g., `int(request.args.get('term'))`) *before* being passed to the template.
+- **Avoid Dynamic Templates:** Do not use `render_template_string` or string concatenation to build templates. Pass variables directly into the template context and let Jinja2 handle the safe rendering: `return render_template('amortization.html', term=term_int)`

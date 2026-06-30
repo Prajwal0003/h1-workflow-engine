@@ -1,0 +1,80 @@
+name: Bug Bounty Scan
+
+on:
+  schedule:
+    - cron: '0 * * * *' # Run every hour automatically
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Specific target handle (e.g. netscaler). Leave blank for random dynamic scan.'
+        required: false
+        default: ''
+
+concurrency:
+  group: scanner-workflow
+  cancel-in-progress: false
+
+jobs:
+  recon-and-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 420
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y golang git wget curl nmap libpcap-dev
+
+      - name: Install Python Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create .env from Secrets
+        run: |
+          cat <<EOF > .env
+          HACKERONE_USERNAME=${{ secrets.HACKERONE_USERNAME }}
+          HACKERONE_API_TOKEN=${{ secrets.HACKERONE_API_TOKEN }}
+          DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          SHODAN_API_KEY=${{ secrets.SHODAN_API_KEY }}
+          NOTION_API_KEY=${{ secrets.NOTION_API_KEY }}
+          NOTION_DATABASE_ID=${{ secrets.NOTION_DATABASE_ID }}
+          INTERACTSH_URL=${{ secrets.INTERACTSH_URL }}
+          CENSYS_API_ID=${{ secrets.CENSYS_API_ID }}
+          CENSYS_API_SECRET=${{ secrets.CENSYS_API_SECRET }}
+          GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
+          EOF
+
+      - name: Install Full Tool Arsenal
+        run: python setup_tools.py
+        timeout-minutes: 45
+
+      - name: Run Autopilot Engine (Dynamic Targets — Full Scanner Suite)
+        env:
+          TARGET: ${{ github.event.inputs.target }}
+        run: |
+          if [ -n "$TARGET" ]; then
+            python autopilot.py "$TARGET" --dynamic
+          else
+            python autopilot.py --dynamic
+          fi
+        timeout-minutes: 360
+
+      - name: Generate HTML Dashboard Report
+        if: always()
+        run: python generate_report.py
+
+      - name: Upload Vulnerability Reports as Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bug-bounty-results
+          path: |
+            data/autopilot/
+            reports/

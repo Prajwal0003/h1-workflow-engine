@@ -1,0 +1,7 @@
+requests
+urllib3
+python-dotenv
+rich
+flask
+neo4j
+playwright
