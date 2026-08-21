@@ -19,28 +19,26 @@ def check_cors_misconfig(url):
         # Zero False Positives Rule: ACAO must exactly match the evil origin AND ACAC must be true.
         # ACAO of "*" with ACAC "true" is rejected by modern browsers, so it's not exploitable.
         if acao == "https://evil.com" and acac == "true":
-            # Heuristics to filter out telemetry/tracking endpoints which intentionally have open CORS
+            # Reflection plus credentials is only a candidate. Account impact
+            # requires a sensitive authenticated response, which this single
+            # request does not establish. The central scanner performs the
+            # two-origin and response-content checks.
             is_telemetry = any(x in url.lower() for x in ["track", "beacon", "analytics", "telemetry", "log", "metrics", "ichnaea"])
             is_empty = len(r.text.strip()) < 25
-            
-            if is_telemetry or is_empty:
-                severity = "LOW"
-                verified = False
-                finding_type = "CORS_MISCONFIGURATION"
-                detail_suffix = " (Likely False Positive: Telemetry endpoint or empty response)"
-            else:
-                severity = "CRITICAL"
-                verified = True
-                finding_type = "CORS_ACCOUNT_TAKEOVER"
-                detail_suffix = " A 1-click account takeover is possible."
+            severity = "LOW" if is_telemetry or is_empty else "MEDIUM"
+            verified = False
+            finding_type = "CORS_MISCONFIGURATION"
+            detail_suffix = " (Candidate only: sensitive authenticated response not established)"
 
             findings.append({
                 "type": finding_type,
                 "url": url,
                 "severity": severity,
-                "confidence": "HIGH",
+                "confidence": "MEDIUM",
                 "verified": verified,
-                "detail": f"Exploitable CORS misconfiguration detected. The server reflects arbitrary Origins ({acao}) and allows Credentials.{detail_suffix}"
+                "verification_method": "cors-single-origin-hint",
+                "verification_evidence": {"deterministic": False, "arbitrary_origin": True, "allow_credentials": True, "sensitive_response": False},
+                "detail": f"CORS candidate: the server reflects arbitrary Origins ({acao}) and allows Credentials.{detail_suffix}"
             })
     except Exception: 
         pass

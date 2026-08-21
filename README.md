@@ -34,7 +34,18 @@ Dedicated scripts to validate findings and eliminate false positives before repo
 - **Subdomain Takeover:** `verify_takeover.py`
 - **SSTI:** `verify_ssti_insightly.py`
 
-### 6. 🛠️ Tooling & Infrastructure
+### 6. 🛡️ False-Positive Controls
+The pipeline treats every scanner result as a candidate until it has type-specific, deterministic evidence. Outputs from overlapping scanners are canonicalized and deduplicated by program, vulnerability family, URL, and parameter before triage. AI triage and generated proof-of-concept scripts are advisory only; an AI response or a printed `VERIFIED: VULNERABLE` marker cannot promote a candidate to reportable status.
+
+The automatic reporting gate currently requires stronger evidence for the highest-noise classes: CORS must show arbitrary-origin reflection, credential allowance, and a sensitive JSON response; SQLi timing must include a clean baseline and repeated controlled delays; open redirects must return a no-follow redirect to the attacker-controlled origin; and IDOR must use two authenticated subjects with cross-account access evidence. Other heuristic findings are saved to `data/autopilot/needs_review.json` for manual validation instead of triggering external alerts and tickets.
+
+Run the precision regression tests with:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+### 7. 🛠️ Tooling & Infrastructure
 - **Tool Management:** Automatically install and update external dependencies like `naabu`, `subfinder`, `katana`, etc. (`setup_tools.py`, `install_tools.sh`, `modules/tool_updater.py`).
 - **AI Integrations:** Utilities for leveraging LLMs to parse context or find vulnerabilities (`fix_groq_to_gemini.py`, `test_ai.py`, `scanners/llm_prompt_injection.py`).
 - **Reporting:** Generate PDF reports for triagers (`generate_pdf_report.py`, `generate_report.py`).

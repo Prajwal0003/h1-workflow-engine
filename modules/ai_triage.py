@@ -181,8 +181,8 @@ RESPOND IN EXACTLY THIS JSON FORMAT (no markdown, no code blocks):
             res = json.loads(c.strip())
             return res
         except:
-            if "true positive" in resp.lower(): return {"verdict": "TRUE_POSITIVE", "confidence": 0.3}
-            if "false positive" in resp.lower(): return {"verdict": "FALSE_POSITIVE", "confidence": 0.3}
+            # Never infer a verdict from prose. A malformed or non-JSON model
+            # response is uncertainty, not evidence of a vulnerability.
             return None
 
     import concurrent.futures
@@ -196,19 +196,43 @@ RESPOND IN EXACTLY THIS JSON FORMAT (no markdown, no code blocks):
     if not gemini_res and not groq_res:
         return {"verdict": "NEEDS_REVIEW", "confidence": 0.0, "reasoning": "Both AI APIs failed"}
 
-    # If only one succeeded, trust it
-    if gemini_res and not groq_res: return gemini_res
-    if groq_res and not gemini_res: return groq_res
+    return _merge_model_results(gemini_res, groq_res)
 
-    # Consensus logic: If EITHER AI says TRUE_POSITIVE, we keep it (Relaxed Filter for Uncensored Groq)
-    if gemini_res.get("verdict") == "TRUE_POSITIVE" or groq_res.get("verdict") == "TRUE_POSITIVE":
-        return {"verdict": "TRUE_POSITIVE", "confidence": max(gemini_res.get("confidence", 0), groq_res.get("confidence", 0)), "reasoning": f"At least one AI verified it. Gemini: {gemini_res.get('verdict')}, Groq: {groq_res.get('verdict')}"}
-    
-    # If both say FALSE_POSITIVE
-    if gemini_res.get("verdict") == "FALSE_POSITIVE" and groq_res.get("verdict") == "FALSE_POSITIVE":
-        return {"verdict": "FALSE_POSITIVE", "confidence": max(gemini_res.get("confidence", 0), groq_res.get("confidence", 0)), "reasoning": "Both AIs agreed it is a false positive."}
-        
-    return {"verdict": "NEEDS_REVIEW", "confidence": 0.5, "reasoning": f"No consensus: Gemini={gemini_res.get('verdict')}, Groq={groq_res.get('verdict')}"}
+
+def _merge_model_results(gemini_res, groq_res):
+    """Merge model outputs without allowing optimism or malformed output to promote a hit."""
+    if not gemini_res and not groq_res:
+        return {"verdict": "NEEDS_REVIEW", "confidence": 0.0, "reasoning": "Both AI APIs failed"}
+
+    # AI is advisory: a single model cannot promote a scanner candidate. A
+    # disagreement is explicitly retained for review instead of being treated
+    # as a true positive.
+    if gemini_res and not groq_res:
+        if gemini_res.get("verdict") == "FALSE_POSITIVE" and float(gemini_res.get("confidence", 0)) >= 0.8:
+            return gemini_res
+        return {"verdict": "NEEDS_REVIEW", "confidence": float(gemini_res.get("confidence", 0)), "reasoning": "Only one model returned a result; independent consensus is unavailable."}
+    if groq_res and not gemini_res:
+        if groq_res.get("verdict") == "FALSE_POSITIVE" and float(groq_res.get("confidence", 0)) >= 0.8:
+            return groq_res
+        return {"verdict": "NEEDS_REVIEW", "confidence": float(groq_res.get("confidence", 0)), "reasoning": "Only one model returned a result; independent consensus is unavailable."}
+
+    gemini_verdict = gemini_res.get("verdict")
+    groq_verdict = groq_res.get("verdict")
+    gemini_conf = float(gemini_res.get("confidence", 0) or 0)
+    groq_conf = float(groq_res.get("confidence", 0) or 0)
+
+    if (gemini_verdict == "TRUE_POSITIVE" and groq_verdict == "TRUE_POSITIVE" and
+            gemini_conf >= 0.8 and groq_conf >= 0.8):
+        return {"verdict": "TRUE_POSITIVE", "confidence": min(gemini_conf, groq_conf),
+                "reasoning": "Both models independently classified the candidate as a high-confidence true positive."}
+
+    if (gemini_verdict == "FALSE_POSITIVE" and groq_verdict == "FALSE_POSITIVE" and
+            gemini_conf >= 0.8 and groq_conf >= 0.8):
+        return {"verdict": "FALSE_POSITIVE", "confidence": min(gemini_conf, groq_conf),
+                "reasoning": "Both models independently classified the candidate as a high-confidence false positive."}
+
+    return {"verdict": "NEEDS_REVIEW", "confidence": min(gemini_conf, groq_conf),
+            "reasoning": f"No high-confidence consensus: Gemini={gemini_verdict}, Groq={groq_verdict}"}
 
 
 def batch_triage(findings, api_key, severity_filter=None, max_findings=20):

@@ -2,6 +2,7 @@ requests
 urllib3
 python-dotenv
 rich
+dnspython
 flask
 neo4j
 playwright

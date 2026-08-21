@@ -11,7 +11,10 @@ import random
 import re
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
+from modules.finding_quality import (QUALITY_SCHEMA_VERSION, deduplicate_findings,
+                                     finding_key, has_deterministic_evidence,
+                                     readiness_reasons)
 
 os.environ["PYTHONIOENCODING"] = "utf-8"
 try:
@@ -53,7 +56,7 @@ try:
     from scanners.wcd_advanced import run_wcd_scan
     from scanners.cloud_ssrf_fuzzer import run_cloud_ssrf_fuzzer
     from scanners.dorking import run_dorking
-    from scanners.graphql_parser import check_graphql
+    from scanners.graphql_parser import check_graphql as check_graphql_parser
     from scanners.cve_scanner import run_cve_scans
     from scanners.hardcoded_fuzzer import check_hardcoded_payloads
     from scanners.sqlmap_fuzzer import run_sqlmap_scan
@@ -388,6 +391,9 @@ def ai_exploit_and_prove(finding):
         )
         
         output = result.stdout.strip()
+        # A generated script can print this marker without proving that the
+        # response actually demonstrated the claimed vulnerability. Keep AI PoC
+        # status separate from the deterministic scanner verification contract.
         verified = "VERIFIED: VULNERABLE" in output
         
         # Save proof
@@ -400,13 +406,13 @@ def ai_exploit_and_prove(finding):
         proof_file.write_text(json.dumps(proof, indent=2), encoding="utf-8")
         
         if verified:
-            log(f"[+] ✅ AI PoC VERIFIED: {vuln_type} at {target_url}")
+            log(f"[+] AI PoC produced output for {vuln_type} at {target_url}; deterministic evidence is still required")
             finding["proof"] = output
             finding["poc_script"] = str(poc_file)
-            finding["verified"] = True
+            finding["ai_proof_verified"] = True
         else:
             log(f"[-] AI PoC could not verify: {vuln_type} (likely false positive)")
-            finding["verified"] = False
+            finding["ai_proof_verified"] = False
         return proof
     except subprocess.TimeoutExpired:
         log(f"[-] AI PoC timed out for {vuln_type}")
@@ -750,7 +756,11 @@ def check_open_redirect(url):
                 if r.status_code in [301, 302, 307, 308]:
                     loc = r.headers.get("Location", "")
                     if "evil.com" in loc:
+                        location_parts = urlparse(loc)
                         return {"type": "OPEN_REDIRECT", "url": target, "severity": "MEDIUM", "confidence": "HIGH",
+                                "verification_method": "no-follow-redirect",
+                                "verification_evidence": {"external_location": True, "attacker_controlled_origin": location_parts.hostname == "evil.com", "location": loc, "status": r.status_code},
+                                "verified": location_parts.hostname == "evil.com",
                                 "detail": f"Redirects to {loc}"}
     except Exception: pass
     return None
@@ -887,9 +897,13 @@ def check_cors(base_url):
 
             acac = r_vuln.headers.get("Access-Control-Allow-Credentials", "").lower() == "true"
             expose = r_vuln.headers.get("Access-Control-Expose-Headers", "").lower()
-            
+
             sensitive_headers = ["authorization", "x-auth-token", "set-cookie", "x-user-id"]
             exposed_sensitive = [h for h in sensitive_headers if h in expose]
+            body_lower = r_vuln.text.lower()
+            sensitive_markers = ['"email"', '"username"', '"user_id"', '"account"', '"balance"', '"phone"', '"address"', '"token"']
+            content_type = r_vuln.headers.get("Content-Type", "").lower()
+            sensitive_response = "json" in content_type and any(marker in body_lower for marker in sensitive_markers)
 
             # Ensure response has body and is not a 404/error page
             if len(r_vuln.text) < 10 or r_vuln.status_code >= 400:
@@ -897,17 +911,28 @@ def check_cors(base_url):
 
             # Deep paths are more likely to return PII, so they carry higher severity if credentials are allowed
             is_deep_path = path != ''
-            
+            evidence = {
+                "arbitrary_origin": origin_type == "arbitrary origins",
+                "allow_credentials": acac,
+                "sensitive_response": sensitive_response,
+                "response_status": r_vuln.status_code,
+                "content_type": content_type,
+                "exposed_sensitive_headers": exposed_sensitive,
+            }
+            verification = {"verification_method": "cors-two-origin-replay", "verification_evidence": evidence,
+                            "verified": bool(evidence["arbitrary_origin"] and acac and sensitive_response)}
+
             if exposed_sensitive and acac:
                 return {"type": "CORS_REFLECTION", "url": url, "severity": "CRITICAL", "confidence": "HIGH",
-                        "duplicate_risk": "HIGH", "detail": f"Reflects {origin_type} + Credentials + Exposes {', '.join(exposed_sensitive)} on deep path {path}" if is_deep_path else f"Reflects {origin_type} + Credentials + Exposes {', '.join(exposed_sensitive)}"}
+                        "duplicate_risk": "HIGH", "detail": f"Reflects {origin_type} + Credentials + Exposes {', '.join(exposed_sensitive)} on deep path {path}" if is_deep_path else f"Reflects {origin_type} + Credentials + Exposes {', '.join(exposed_sensitive)}", **verification}
             elif acac:
-                severity = "CRITICAL" if is_deep_path else "HIGH"
+                severity = "CRITICAL" if is_deep_path and sensitive_response else "HIGH"
                 return {"type": "CORS_REFLECTION", "url": url, "severity": severity, "confidence": "HIGH",
-                        "duplicate_risk": "VERY HIGH", "detail": f"Reflects {origin_type} + allows Credentials on path {path}"}
+                        "duplicate_risk": "VERY HIGH", "detail": f"Reflects {origin_type} + allows Credentials on path {path}", **verification}
             elif not is_deep_path:
                 return {"type": "CORS_REFLECTION", "url": url, "severity": "LOW", "confidence": "MEDIUM",
-                        "duplicate_risk": "VERY HIGH", "detail": f"Reflects {origin_type} but NO credentials"}
+                        "duplicate_risk": "VERY HIGH", "detail": f"Reflects {origin_type} but NO credentials", **verification}
+
     except Exception: pass
     return None
 
@@ -925,7 +950,7 @@ def check_takeover(url):
             if ans.get("type") == 5:
                 cname_target = ans.get("data", "")
                 break
-        if dns_status != 0:  # NXDOMAIN
+        if dns_status == 3:  # NXDOMAIN only; SERVFAIL/NODATA are not takeover proof
             if cname_target:  # Dangling CNAME = real takeover candidate
                 # Verify CNAME target is actually resolvable to a takeover service
                 # We will only flag HIGH if the CNAME contains known provider strings (aws, heroku, github, etc)
@@ -944,6 +969,8 @@ def check_takeover(url):
                     return {"type": "SUBDOMAIN_TAKEOVER", "url": url, "severity": "LOW", "confidence": "LOW",
                             "requires_manual_verification": True, "detail": f"NXDOMAIN + generic dangling CNAME → {cname_target} (Unknown if claimable)"}
             return None  # NXDOMAIN without CNAME = just unconfigured, not exploitable
+        if dns_status != 0:
+            return None
         # Step 3: Even if DNS resolves, check HTTP for takeover fingerprints
         try:
             rh = requests.get(url, headers=get_stealth_headers(), timeout=5, verify=False)
@@ -965,19 +992,28 @@ def check_sensitive_single(url, b_status=None, b_len=None):
 
 def check_sqli_single(target, payload):
     try:
-        # Step 1: Baseline timing (clean request to base URL)
-        base_url = target.split("?")[0]
-        try:
-            bs = time.time()
-            requests.get(base_url, headers=get_stealth_headers(), timeout=8, verify=False)
-            baseline = time.time() - bs
-        except:
-            baseline = 0.5
-        
+        # Use the same endpoint and parameter for the control request. A root
+        # URL baseline can be fast while the vulnerable endpoint is inherently
+        # slow, which creates timing false positives.
+        parts = urlsplit(target)
+        query_pairs = parse_qsl(parts.query, keep_blank_values=True)
+        if not query_pairs:
+            return None
+        control_pairs = [(key, "1" if value else value) if index == 0 else (key, value)
+                         for index, (key, value) in enumerate(query_pairs)]
+        control_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(control_pairs), ""))
+
+        baseline_samples = []
+        for _ in range(2):
+            bs = time.perf_counter()
+            requests.get(control_url, headers=get_stealth_headers(), timeout=8, verify=False)
+            baseline_samples.append(time.perf_counter() - bs)
+        baseline = sum(baseline_samples) / len(baseline_samples)
+
         # Step 2: Test with payload
-        start = time.time()
+        start = time.perf_counter()
         r = requests.get(target, headers=get_stealth_headers(), timeout=12, verify=False)
-        el = time.time() - start
+        el = time.perf_counter() - start
         
         if r.status_code == 500:
             # Only flag if response contains actual SQL error strings
@@ -991,13 +1027,17 @@ def check_sqli_single(target, payload):
             delay = el - baseline
             # Require delay to be at least 3.5s MORE than baseline
             if delay >= 3.5 and el >= 4.5:
-                # VERIFY: Send payload a second time
+                # VERIFY: Repeat the same payload after a short pause. Both
+                # requests must exceed the same-endpoint control by a margin.
                 time.sleep(0.3)
-                s2 = time.time()
+                s2 = time.perf_counter()
                 requests.get(target, headers=get_stealth_headers(), timeout=12, verify=False)
-                el2 = time.time() - s2
+                el2 = time.perf_counter() - s2
                 if el2 >= 4.0 and (el2 - baseline) >= 3.0:
                     return {"type": "SQLI_TIME", "url": target, "severity": "CRITICAL", "confidence": "HIGH",
+                            "verification_method": "controlled-timing",
+                            "verification_evidence": {"control_url": control_url, "baseline_samples": [round(x, 3) for x in baseline_samples], "baseline_seconds": round(baseline, 3), "delay1_seconds": round(el, 3), "delay2_seconds": round(el2, 3), "independent_repeats": True},
+                            "verified": True,
                             "detail": f"Baseline:{baseline:.1f}s Delay1:{el:.1f}s Delay2:{el2:.1f}s (verified)"}
             return None  # Slow server, not SQLi
     except Exception: pass
@@ -1357,7 +1397,7 @@ def scan_target_fast(handle, target_data, args=None):
                 tasks.append(executor.submit(check_js_analyzer, b))
                 tasks.append(executor.submit(check_api_schema, b))
                 tasks.append(executor.submit(run_dorking, b))
-                tasks.append(executor.submit(check_graphql, b))
+                tasks.append(executor.submit(check_graphql_parser, b))
                 
                 # Execute dynamically generated custom AI tools
                 for custom_scanner in CUSTOM_SCANNERS:
@@ -1479,6 +1519,10 @@ def scan_target_fast(handle, target_data, args=None):
                     res["program"] = handle
                     findings.append(res)
                     
+    # Collapse outputs from overlapping scanners before verification. Several
+    # modules probe the same base URL and otherwise create duplicate alerts.
+    findings = deduplicate_findings(findings)
+
     # === Feature 4: WAF Evasion Re-test ===
     # For any finding that was blocked by WAF, try AI evasion
     if FEATURES_LOADED and GEMINI_API_KEY and "your_" not in GEMINI_API_KEY:
@@ -1642,7 +1686,9 @@ def main():
     if out.exists():
         try: previous_scan = json.loads(out.read_text())
         except: pass
-    previous_sigs = {f"{x.get('type')}_{x.get('url')}" for x in previous_scan}
+    previous_quality_version = next((x.get("_quality_schema_version") for x in previous_scan if isinstance(x, dict)), None)
+    previous_sigs = ({finding_key(x) for x in previous_scan if isinstance(x, dict)}
+                     if previous_quality_version == QUALITY_SCHEMA_VERSION else set())
         
     all_findings = []
     for handle, target_data in targets.items():
@@ -1674,9 +1720,10 @@ def main():
     noise_findings = []
     
     for f in all_findings:
-        sig = f"{f.get('type')}_{f.get('url')}"
+        sig = finding_key(f)
         if sig not in previous_sigs:
             new_count += 1
+            f["_quality_schema_version"] = QUALITY_SCHEMA_VERSION
             f["estimated_duplicate_risk"] = duplicate_risk_map.get(f.get("type"), "MEDIUM")
             f["confidence_score"] = 50 # Default 0-100 score
             
@@ -1718,20 +1765,20 @@ def main():
                         pass
                     time.sleep(0.5)  # Rate limit Gemini calls
 
-            # AI exploit + proof (only for HIGH/MEDIUM confidence, MEDIUM/HIGH/CRITICAL severity)
-            if f.get("confidence_score") >= 50 and f.get("severity") in ["MEDIUM", "HIGH", "CRITICAL"]:
+            # AI PoC generation is enrichment only, never verification. Run it
+            # only after a finding has already met its deterministic evidence
+            # contract, avoiding active AI-generated probes for noisy hints.
+            if (f.get("verified") is True and has_deterministic_evidence(f)
+                    and f.get("confidence_score") >= 50
+                    and f.get("severity") in ["MEDIUM", "HIGH", "CRITICAL"]):
                 proof = ai_exploit_and_prove(f)
                 if proof and proof.get("verified"):
-                    verified_count += 1
-                    f["confidence_score"] = 100
+                    f["ai_proof_available"] = True
 
-            # --- STRICT ZERO-TRUST AI FILTER ---
-            # Readiness check
-            reasons = []
-            if not f.get("scope_verified"): reasons.append("Excluded by scope")
-            if f.get("type") == "CORS_REFLECTION" and "Credentials" not in str(f.get("detail", "")): reasons.append("CORS without credentials")
-            if not f.get("verified"): reasons.append("No exploit PoC")
-            
+            # --- STRICT ZERO-TRUST EVIDENCE FILTER ---
+            # AI triage and generated PoCs are advisory only. They cannot turn a
+            # heuristic hit into an automatically reportable vulnerability.
+            reasons = readiness_reasons(f)
             if not reasons:
                 f["status"] = "READY_TO_REPORT"
                 f["requires_manual_verification"] = False
@@ -1741,14 +1788,14 @@ def main():
                 f["requires_manual_verification"] = True
 
             if f.get("severity") in ["MEDIUM", "HIGH", "CRITICAL"]:
-                triage_verdict = f.get("ai_triage", {}).get("verdict")
-                
-                if f.get("verified") is not True and triage_verdict != "TRUE_POSITIVE":
-                    log(f"[*] 🛡️ STRICT AI FILTER: Dropping unverified {f.get('type')} on {f.get('url')} to prevent false positives.")
+                if not has_deterministic_evidence(f):
+                    log(f"[*] 🛡️ EVIDENCE FILTER: Holding {f.get('type')} on {f.get('url')} for manual review: {', '.join(reasons)}")
                     needs_review_findings.append(f)
                     continue
                 
-                # If it survived the strict filter, it is a HIGH-CONFIDENCE REAL BUG!
+                # Only findings with type-specific, deterministic evidence reach
+                # alerting, external ticketing, and report generation.
+                verified_count += 1
                 if f.get("estimated_duplicate_risk") in ["VERY HIGH", "HIGH"]:
                     log(f"⚠️ WARNING: {f.get('type')} has {f.get('estimated_duplicate_risk')} duplicate risk. Verify before submitting!")
                 

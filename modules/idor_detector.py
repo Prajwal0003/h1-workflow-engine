@@ -274,6 +274,16 @@ class DualSessionIDORDetector:
                                 "url": url,
                                 "severity": "CRITICAL",
                                 "confidence": "HIGH",
+                                "verified": True,
+                                "verification_method": "dual-session",
+                                "verification_evidence": {
+                                    "subject_a": "user_a",
+                                    "subject_b": "user_b",
+                                    "cross_account_access": True,
+                                    "same_response": True,
+                                    "pii_detected": True,
+                                    "response_bytes": len_a,
+                                },
                                 "detail": (f"User B can access User A's resource. "
                                            f"Identical responses ({len_a} bytes) with PII detected."),
                             })
@@ -296,7 +306,18 @@ class DualSessionIDORDetector:
                                             "type": "IDOR_RESOURCE_ACCESS",
                                             "url": id_url,
                                             "severity": "HIGH",
-                                            "confidence": "MEDIUM",
+                                            "confidence": "HIGH",
+                                            "verified": True,
+                                            "verification_method": "dual-session",
+                                            "verification_evidence": {
+                                                "subject_a": "user_a",
+                                                "subject_b": "user_b",
+                                                "cross_account_access": True,
+                                                "same_response": False,
+                                                "resource_id": resource_id,
+                                                "response_status": r_b_id.status_code,
+                                                "response_bytes": len(r_b_id.text),
+                                            },
                                             "detail": (f"User B accessed User A's resource ID {resource_id}. "
                                                        f"Response: {r_b_id.status_code} ({len(r_b_id.text)} bytes)"),
                                         })
