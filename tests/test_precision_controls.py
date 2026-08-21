@@ -32,6 +32,16 @@ class PrecisionControlTests(unittest.TestCase):
         ])
         self.assertEqual(len(findings), 1)
 
+    def test_ai_proof_is_retained_but_not_independent_verification(self):
+        finding = {
+            "type": "XSS_CANDIDATE",
+            "verified": False,
+            "ai_proof_available": True,
+            "ai_proof_marker_found": True,
+            "proof": "VERIFIED: VULNERABLE",
+        }
+        self.assertFalse(has_deterministic_evidence(finding))
+
     def test_cors_requires_sensitive_authenticated_response(self):
         candidate = {
             "type": "CORS_REFLECTION",

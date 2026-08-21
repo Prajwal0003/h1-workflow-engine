@@ -394,25 +394,30 @@ def ai_exploit_and_prove(finding):
         # A generated script can print this marker without proving that the
         # response actually demonstrated the claimed vulnerability. Keep AI PoC
         # status separate from the deterministic scanner verification contract.
-        verified = "VERIFIED: VULNERABLE" in output
+        ai_marker_found = "VERIFIED: VULNERABLE" in output
         
-        # Save proof
+        # Save proof. The model-generated marker is useful evidence for a
+        # reviewer, but is never treated as independent confirmation because
+        # the generated script controls what it prints.
         proof = {
             "finding_type": vuln_type, "url": target_url,
             "poc_script": script, "poc_output": output,
-            "verified": verified, "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            "ai_marker_found": ai_marker_found,
+            "verified": False,
+            "verification_note": "AI marker requires independent type-specific verification",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
         proof_file = poc_dir / f"proof_{safe_type}_{ts}.json"
         proof_file.write_text(json.dumps(proof, indent=2), encoding="utf-8")
         
-        if verified:
-            log(f"[+] AI PoC produced output for {vuln_type} at {target_url}; deterministic evidence is still required")
-            finding["proof"] = output
-            finding["poc_script"] = str(poc_file)
-            finding["ai_proof_verified"] = True
+        finding["proof"] = output
+        finding["poc_script"] = str(poc_file)
+        finding["ai_proof_available"] = True
+        finding["ai_proof_marker_found"] = ai_marker_found
+        if ai_marker_found:
+            log(f"[+] AI PoC produced a candidate proof for {vuln_type} at {target_url}; deterministic evidence is still required")
         else:
-            log(f"[-] AI PoC could not verify: {vuln_type} (likely false positive)")
-            finding["ai_proof_verified"] = False
+            log(f"[*] AI PoC output retained for review: {vuln_type} at {target_url}; no verification marker was present")
         return proof
     except subprocess.TimeoutExpired:
         log(f"[-] AI PoC timed out for {vuln_type}")
@@ -1765,14 +1770,13 @@ def main():
                         pass
                     time.sleep(0.5)  # Rate limit Gemini calls
 
-            # AI PoC generation is enrichment only, never verification. Run it
-            # only after a finding has already met its deterministic evidence
-            # contract, avoiding active AI-generated probes for noisy hints.
-            if (f.get("verified") is True and has_deterministic_evidence(f)
-                    and f.get("confidence_score") >= 50
+            # AI PoC generation remains active for eligible medium/high-impact
+            # candidates. Its output is retained for human review, but cannot
+            # replace the deterministic verification contract.
+            if (f.get("confidence_score") >= 50
                     and f.get("severity") in ["MEDIUM", "HIGH", "CRITICAL"]):
                 proof = ai_exploit_and_prove(f)
-                if proof and proof.get("verified"):
+                if proof and proof.get("ai_marker_found"):
                     f["ai_proof_available"] = True
 
             # --- STRICT ZERO-TRUST EVIDENCE FILTER ---
