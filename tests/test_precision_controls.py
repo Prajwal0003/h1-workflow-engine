@@ -61,6 +61,64 @@ class PrecisionControlTests(unittest.TestCase):
         self.assertEqual(finding[0]["verification_method"], "ssti-multi-payload")
         self.assertEqual(finding[0]["verification_evidence"]["payload_count"], 2)
 
+    def test_unstable_sqli_timing_is_review_candidate(self):
+        import autopilot
+
+        class Response:
+            status_code = 200
+            text = "ok"
+            headers = {"Content-Type": "text/plain"}
+
+        payload = "'; WAITFOR DELAY '0:0:5'--"
+        target = "https://demo.test/qp.asp?id=%27%3B%20WAITFOR%20DELAY%20%270%3A0%3A5%27--"
+        durations = iter([3.3, 11.2, 0.4, 7.1, 0.5, 0.6, 0.4, 0.5])
+        clock_state = {"before": True, "now": 0.0}
+
+        def fake_clock():
+            if clock_state["before"]:
+                clock_state["before"] = False
+                return clock_state["now"]
+            clock_state["now"] += next(durations)
+            clock_state["before"] = True
+            return clock_state["now"]
+
+        with patch.object(autopilot.requests, "get", return_value=Response()), \
+             patch.object(autopilot.time, "perf_counter", side_effect=fake_clock), \
+             patch.object(autopilot.time, "sleep"):
+            finding = autopilot.check_sqli_single(target, payload)
+        self.assertEqual(finding["type"], "SQLI_TIME_CANDIDATE")
+        self.assertFalse(finding["verified"])
+        self.assertGreater(finding["verification_evidence"]["control_spread_seconds"], 1.5)
+
+    def test_stable_sqli_timing_can_be_confirmed(self):
+        import autopilot
+
+        class Response:
+            status_code = 200
+            text = "ok"
+            headers = {"Content-Type": "text/plain"}
+
+        payload = "'; WAITFOR DELAY '0:0:5'--"
+        target = "https://demo.test/qp.asp?id=%27%3B%20WAITFOR%20DELAY%20%270%3A0%3A5%27--"
+        durations = iter([0.4, 5.5, 0.5, 5.8, 0.4, 5.6, 0.5, 0.4])
+        clock_state = {"before": True, "now": 0.0}
+
+        def fake_clock():
+            if clock_state["before"]:
+                clock_state["before"] = False
+                return clock_state["now"]
+            clock_state["now"] += next(durations)
+            clock_state["before"] = True
+            return clock_state["now"]
+
+        with patch.object(autopilot.requests, "get", return_value=Response()), \
+             patch.object(autopilot.time, "perf_counter", side_effect=fake_clock), \
+             patch.object(autopilot.time, "sleep"):
+            finding = autopilot.check_sqli_single(target, payload)
+        self.assertEqual(finding["type"], "SQLI_TIME")
+        self.assertTrue(finding["verified"])
+        self.assertEqual(finding["verification_evidence"]["positive_repeats"], 3)
+
     def test_autopilot_headers_read_live_auth_context(self):
         import autopilot
         from scanners import utils

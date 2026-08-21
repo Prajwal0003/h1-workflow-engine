@@ -10,6 +10,7 @@ import platform
 import random
 import re
 from pathlib import Path
+from statistics import median
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 from modules.finding_quality import (QUALITY_SCHEMA_VERSION, deduplicate_findings,
@@ -1116,61 +1117,173 @@ def check_sensitive_single(url, b_status=None, b_len=None):
         return None
 
 def check_sqli_single(target, payload):
+    """Compare the injected parameter with alternating same-endpoint controls."""
     try:
-        # Use the same endpoint and parameter for the control request. A root
-        # URL baseline can be fast while the vulnerable endpoint is inherently
-        # slow, which creates timing false positives.
         parts = urlsplit(target)
         query_pairs = parse_qsl(parts.query, keep_blank_values=True)
         if not query_pairs:
             return None
-        control_pairs = [(key, "1" if value else value) if index == 0 else (key, value)
-                         for index, (key, value) in enumerate(query_pairs)]
-        control_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(control_pairs), ""))
 
-        baseline_samples = []
+        payload_text = str(payload)
+        matching_indices = [index for index, (_, value) in enumerate(query_pairs)
+                            if value == payload_text or payload_text in value]
+        if len(matching_indices) != 1:
+            # Do not guess which parameter was tested; that creates invalid
+            # controls when an endpoint has multiple query parameters.
+            return None
+        injection_index = matching_indices[0]
+        parameter, _ = query_pairs[injection_index]
+        control_pairs = list(query_pairs)
+        control_pairs[injection_index] = (parameter, "1")
+        control_url = urlunsplit((parts.scheme, parts.netloc, parts.path,
+                                  urlencode(control_pairs), ""))
+
+        def timed_get(request_url, timeout):
+            started = time.perf_counter()
+            try:
+                response = requests.get(request_url, headers=get_stealth_headers(),
+                                        timeout=timeout, verify=False,
+                                        allow_redirects=False)
+            except requests.RequestException:
+                return None, None
+            return response, time.perf_counter() - started
+
+        sql_error_pattern = re.compile(
+            r"(?:sql syntax|syntax error|mysql|maria\s*db|ora-\d+|postgres(?:ql)?|"
+            r"sqlite|odbc|microsoft sql server|unclosed quotation)", re.I)
+
+        # Always collect an endpoint-matched control first. This prevents a
+        # slow route, generic 500 page, or WAF response from being attributed
+        # to the payload.
+        first_control, first_control_time = timed_get(control_url, 10)
+        if first_control is None:
+            return None
+
+        start_response, first_payload_time = timed_get(target, 15)
+        if start_response is None:
+            return None
+
+        if start_response.status_code >= 500:
+            if (start_response.status_code == 500
+                    and sql_error_pattern.search(start_response.text)
+                    and not sql_error_pattern.search(first_control.text or "")):
+                return {
+                    "type": "SQLI_ERROR",
+                    "url": target,
+                    "parameter": parameter,
+                    "severity": "HIGH",
+                    "confidence": "MEDIUM",
+                    "verified": False,
+                    "verification_method": "sql-error-diff",
+                    "verification_evidence": {
+                        "deterministic": False,
+                        "control_url": control_url,
+                        "control_status": first_control.status_code,
+                        "payload_status": start_response.status_code,
+                        "error_marker": sql_error_pattern.search(start_response.text).group(0),
+                    },
+                    "detail": "Payload produced a SQL-like error absent from the same-parameter control; independent verification is required.",
+                }
+            return None
+
+        if "WAITFOR" not in payload.upper():
+            return None
+
+        control_samples = [first_control_time]
+        payload_samples = [first_payload_time]
+        control_statuses = [first_control.status_code]
+        payload_statuses = [start_response.status_code]
+
+        # Alternate control and payload requests. A batch of slow payload
+        # requests after a batch of controls is vulnerable to rate-limit and
+        # network-state confounding.
         for _ in range(2):
-            bs = time.perf_counter()
-            requests.get(control_url, headers=get_stealth_headers(), timeout=8, verify=False)
-            baseline_samples.append(time.perf_counter() - bs)
-        baseline = sum(baseline_samples) / len(baseline_samples)
+            time.sleep(0.2)
+            control_response, control_time = timed_get(control_url, 10)
+            if control_response is None:
+                return None
+            control_samples.append(control_time)
+            control_statuses.append(control_response.status_code)
+            time.sleep(0.2)
+            payload_response, payload_time = timed_get(target, 15)
+            if payload_response is None:
+                return None
+            payload_samples.append(payload_time)
+            payload_statuses.append(payload_response.status_code)
 
-        # Step 2: Test with payload
-        start = time.perf_counter()
-        r = requests.get(target, headers=get_stealth_headers(), timeout=12, verify=False)
-        el = time.perf_counter() - start
-        
-        if r.status_code == 500:
-            # Only flag if response contains actual SQL error strings
-            sql_indicators = ["sql", "syntax", "mysql", "ora-", "postgres", "sqlite", "odbc", "microsoft"]
-            if any(ind in r.text.lower() for ind in sql_indicators):
-                return {"type": "SQLI_ERROR", "url": target, "severity": "HIGH", "confidence": "HIGH",
-                        "detail": "SQL error string in 500 response"}
-            return None  # Generic 500 is NOT sql injection
-        
-        elif "WAITFOR" in payload:
-            delay = el - baseline
-            # Require delay to be at least 3.5s MORE than baseline
-            if delay >= 3.5 and el >= 4.5:
-                # VERIFY: Repeat the same payload after a short pause. Both
-                # requests must exceed the same-endpoint control by a margin.
-                time.sleep(0.3)
-                s2 = time.perf_counter()
-                requests.get(target, headers=get_stealth_headers(), timeout=12, verify=False)
-                el2 = time.perf_counter() - s2
-                s3 = time.perf_counter()
-                control_after_response = requests.get(control_url, headers=get_stealth_headers(), timeout=8, verify=False)
-                control_after = time.perf_counter() - s3
-                if (el2 >= 4.0 and (el2 - baseline) >= 3.0
-                        and control_after_response.status_code < 500
-                        and control_after <= baseline + 2.0):
-                    return {"type": "SQLI_TIME", "url": target, "severity": "CRITICAL", "confidence": "HIGH",
-                            "verification_method": "controlled-timing",
-                            "verification_evidence": {"control_url": control_url, "baseline_samples": [round(x, 3) for x in baseline_samples], "baseline_seconds": round(baseline, 3), "delay1_seconds": round(el, 3), "delay2_seconds": round(el2, 3), "post_control_seconds": round(control_after, 3), "independent_repeats": True},
-                            "verified": True,
-                            "detail": f"Baseline:{baseline:.1f}s Delay1:{el:.1f}s Delay2:{el2:.1f}s ControlAfter:{control_after:.1f}s (verified)"}
-            return None  # Slow server, not SQLi
-    except Exception: pass
+        post_control_samples = []
+        for _ in range(2):
+            time.sleep(0.2)
+            control_response, control_time = timed_get(control_url, 10)
+            if control_response is None:
+                return None
+            post_control_samples.append(control_time)
+            control_statuses.append(control_response.status_code)
+
+        all_controls = control_samples + post_control_samples
+        control_median = median(all_controls)
+        payload_median = median(payload_samples)
+        control_spread = max(all_controls) - min(all_controls)
+        payload_spread = max(payload_samples) - min(payload_samples)
+        positive_repeats = sum(
+            payload_time >= control_time + 3.5 and payload_time >= 4.5
+            for control_time, payload_time in zip(control_samples, payload_samples)
+        )
+        stable_controls = (control_spread <= 1.5
+                           and all(status < 500 for status in control_statuses))
+        stable_payloads = (payload_spread <= 2.0
+                           and all(status < 500 for status in payload_statuses))
+        repeatable = (positive_repeats >= 2
+                      and payload_median - control_median >= 4.0
+                      and stable_controls and stable_payloads)
+        evidence = {
+            "control_url": control_url,
+            "parameter": parameter,
+            "control_samples": [round(value, 3) for value in all_controls],
+            "payload_samples": [round(value, 3) for value in payload_samples],
+            "control_median_seconds": round(control_median, 3),
+            "payload_median_seconds": round(payload_median, 3),
+            "control_spread_seconds": round(control_spread, 3),
+            "payload_spread_seconds": round(payload_spread, 3),
+            "positive_repeats": positive_repeats,
+            "required_positive_repeats": 2,
+            "statuses": {"control": control_statuses, "payload": payload_statuses},
+            "independent_repeats": True,
+            "deterministic": repeatable,
+        }
+        if repeatable:
+            return {
+                "type": "SQLI_TIME",
+                "url": target,
+                "parameter": parameter,
+                "severity": "CRITICAL",
+                "confidence": "HIGH",
+                "verification_method": "controlled-timing",
+                "verification_evidence": evidence,
+                "verified": True,
+                "detail": (f"ControlMedian:{control_median:.1f}s PayloadMedian:{payload_median:.1f}s "
+                           f"PositiveRepeats:{positive_repeats}/3 ControlSpread:{control_spread:.1f}s (verified)"),
+            }
+
+        # Preserve a useful lead for AI/manual review, but never let unstable
+        # timing become an automatic critical report.
+        if positive_repeats >= 1 and payload_median - control_median >= 2.0:
+            return {
+                "type": "SQLI_TIME_CANDIDATE",
+                "url": target,
+                "parameter": parameter,
+                "severity": "MEDIUM",
+                "confidence": "MEDIUM",
+                "verification_method": "unstable-controlled-timing",
+                "verification_evidence": evidence,
+                "verified": False,
+                "detail": (f"Timing difference needs review: ControlMedian:{control_median:.1f}s "
+                           f"PayloadMedian:{payload_median:.1f}s PositiveRepeats:{positive_repeats}/3 "
+                           f"ControlSpread:{control_spread:.1f}s PayloadSpread:{payload_spread:.1f}s."),
+            }
+        return None
+    except Exception:
+        return None
 
 def check_idor_single(target, b_len):
     try:
