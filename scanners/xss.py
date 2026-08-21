@@ -61,6 +61,14 @@ def check_xss(url):
                     "url": data.get("data", url),
                     "severity": "HIGH",
                     "confidence": "HIGH",
+                    "verified": True,
+                    "verification_method": "dalfox-confirmed",
+                    "verification_evidence": {
+                        "deterministic": True,
+                        "tool": "dalfox",
+                        "tool_type": data.get("type", "reflected"),
+                        "payload": data.get("payload", "")[:200],
+                    },
                     "detail": f"Dalfox confirmed XSS: {data.get('type', 'reflected')} — {data.get('payload', '')[:60]}"
                 })
         except (json.JSONDecodeError, KeyError):
@@ -93,9 +101,17 @@ def check_xss(url):
                     findings.append({
                         "type": "XSS_REFLECTED",
                         "url": test_url,
-                        "severity": "HIGH",
-                        "confidence": "HIGH",
-                        "detail": f"Payload reflected unescaped: {payload[:40]}"
+                        "severity": "MEDIUM",
+                        "confidence": "MEDIUM",
+                        "verified": False,
+                        "verification_method": "reflection-hint",
+                        "verification_evidence": {
+                            "deterministic": False,
+                            "content_type": ct,
+                            "payload_reflected": True,
+                            "execution_proven": False,
+                        },
+                        "detail": f"Payload reflected in an HTML response; browser execution is not proven: {payload[:40]}"
                     })
                     break  # One confirmed XSS per param is enough
     return findings if findings else None

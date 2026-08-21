@@ -11,7 +11,7 @@ import random
 import re
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 from modules.finding_quality import (QUALITY_SCHEMA_VERSION, deduplicate_findings,
                                      finding_key, has_deterministic_evidence,
                                      readiness_reasons)
@@ -137,12 +137,23 @@ USER_AGENTS = [
 ]
 
 def get_stealth_headers():
-    return {
+    headers = {
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "*/*",
         "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}",
         "X-Hackerone": "suppliertest"
     }
+    # Read the shared context at request time; importing the values at module
+    # load would leave authenticated scanners stuck with stale None values.
+    try:
+        from scanners import utils as scanner_utils
+        if scanner_utils.GLOBAL_COOKIE:
+            headers["Cookie"] = scanner_utils.GLOBAL_COOKIE
+        if scanner_utils.GLOBAL_BEARER:
+            headers["Authorization"] = f"Bearer {scanner_utils.GLOBAL_BEARER}"
+    except Exception:
+        pass
+    return headers
 
 ENV_VARS = {}
 if Path(".env").exists():
@@ -709,14 +720,61 @@ def ai_autonomous_exploit(url):
         ]
         r = requests.post(api_url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
         payloads = r.json()['candidates'][0]['content']['parts'][0]['text'].strip().split('\n')
+        parsed_target = urlsplit(url)
+        baseline_pairs = parse_qsl(parsed_target.query, keep_blank_values=True)
+        baseline_pairs.extend([("id", "H1AIBASELINE"), ("q", "H1AIBASELINE")])
+        baseline_url = urlunsplit((parsed_target.scheme, parsed_target.netloc, parsed_target.path,
+                                  urlencode(baseline_pairs), parsed_target.fragment))
+        try:
+            baseline_resp = requests.get(baseline_url, headers=get_stealth_headers(), timeout=5, verify=False)
+            baseline_text = baseline_resp.text
+        except Exception:
+            baseline_text = ""
+
         for p in payloads:
             p = p.strip().strip('"').strip("'")
-            if not p: continue
+            if not p:
+                continue
             headers = get_stealth_headers()
-            test_url = f"{url}?id={requests.utils.quote(p)}&q={requests.utils.quote(p)}"
+            test_pairs = parse_qsl(parsed_target.query, keep_blank_values=True)
+            test_pairs.extend([("id", p), ("q", p)])
+            test_url = urlunsplit((parsed_target.scheme, parsed_target.netloc, parsed_target.path,
+                                   urlencode(test_pairs), parsed_target.fragment))
             resp = requests.get(test_url, headers=headers, timeout=5, verify=False)
-            if "root:x:0:0" in resp.text or "syntax error" in resp.text.lower():
-                findings.append({"type": "AI_AUTONOMOUS_EXPLOIT_SUCCESS", "url": test_url, "severity": "CRITICAL", "detail": f"AI Successfully exploited endpoint using custom payload: {p[:30]}..."})
+            body_lower = resp.text.lower()
+            if "root:x:0:0" in resp.text and "root:x:0:0" not in baseline_text:
+                findings.append({
+                    "type": "AI_AUTONOMOUS_EXPLOIT_SUCCESS",
+                    "url": test_url,
+                    "severity": "CRITICAL",
+                    "confidence": "HIGH",
+                    "verified": True,
+                    "verification_method": "local-file-signature",
+                    "verification_evidence": {
+                        "deterministic": True,
+                        "source": "ai_autonomous_exploit",
+                        "signature": "root:x:0:0",
+                        "baseline_signature_absent": True,
+                        "payload": p[:200],
+                    },
+                    "detail": f"AI payload returned a local-file signature not present in the baseline: {p[:30]}...",
+                })
+            elif "syntax error" in body_lower and "syntax error" not in baseline_text.lower():
+                findings.append({
+                    "type": "AI_AUTONOMOUS_EXPLOIT_CANDIDATE",
+                    "url": test_url,
+                    "severity": "MEDIUM",
+                    "confidence": "MEDIUM",
+                    "verified": False,
+                    "verification_method": "ai-response-error",
+                    "verification_evidence": {
+                        "deterministic": False,
+                        "error_marker": "syntax error",
+                        "baseline_error_absent": True,
+                        "payload": p[:200],
+                    },
+                    "detail": f"AI payload changed the response to a SQL-like error; database impact requires independent verification: {p[:30]}...",
+                })
     except: pass
     return findings if findings else None
 
@@ -987,13 +1045,75 @@ def check_takeover(url):
     except Exception: pass
 
 def check_sensitive_single(url, b_status=None, b_len=None):
+    """Discover interesting paths without treating every 200 page as exposure."""
+    path = urlparse(url).path.lower()
     try:
-        r = requests.get(url, headers=get_stealth_headers(), timeout=3, verify=False)
-        if r.status_code == 200 and len(r.text) > 50:
-            if b_status == 200 and b_len is not None and abs(len(r.text) - b_len) < 100:
-                return None
-            return {"type": "SENSITIVE_PATH", "url": url, "severity": "MEDIUM"}
-    except Exception: pass
+        r = requests.get(url, headers=get_stealth_headers(), timeout=3,
+                         verify=False, allow_redirects=False)
+        if r.status_code != 200 or len(r.text) <= 20:
+            return None
+        if b_status == 200 and b_len is not None and abs(len(r.text) - b_len) < 100:
+            return None
+
+        body = r.text
+        content_type = r.headers.get("Content-Type", "").lower()
+        lower_body = body.lower()
+        soft_error_markers = ("page not found", "not found", "access denied",
+                              "unauthorized", "log in", "login", "error 404")
+        if ("text/html" in content_type or lower_body.lstrip().startswith("<html")
+                or any(marker in lower_body[:1000] for marker in soft_error_markers)):
+            return None
+
+        if path == "/.env":
+            env_assignments = re.findall(r"(?m)^[A-Za-z_][A-Za-z0-9_]{1,}=.+$", body)
+            sensitive_names = ("key", "secret", "token", "password", "database", "db_", "api", "url", "host", "port")
+            has_plausible_name = any(any(name in assignment.split("=", 1)[0].lower() for name in sensitive_names)
+                                     for assignment in env_assignments)
+            signature = re.search(r"(?m)^[A-Za-z_][A-Za-z0-9_]{1,}=.+$", body) if len(env_assignments) >= 2 and has_plausible_name else None
+            finding_type = "EXPOSED_ENV_FILE"
+        elif path == "/.git/config":
+            signature = re.search(r"(?im)^\s*\[(core|remote|branch)\b", body)
+            finding_type = "GIT_EXPOSURE"
+        else:
+            # Keep discovery alive for API/admin paths, but make this a lead
+            # rather than a verified exposure until content is reviewed.
+            return {
+                "type": "SENSITIVE_PATH",
+                "url": url,
+                "severity": "LOW",
+                "confidence": "LOW",
+                "verified": False,
+                "verification_method": "path-discovery",
+                "verification_evidence": {
+                    "deterministic": False,
+                    "status": r.status_code,
+                    "content_type": content_type,
+                    "response_length": len(body),
+                },
+                "detail": "Interesting non-HTML path returned a distinct 200 response; content requires review.",
+            }
+        if not signature:
+            return None
+
+        return {
+            "type": finding_type,
+            "url": url,
+            "severity": "HIGH",
+            "confidence": "HIGH",
+            "verified": True,
+            "verification_method": "config-file-signature",
+            "verification_evidence": {
+                "deterministic": True,
+                "path": path,
+                "status": r.status_code,
+                "content_type": content_type,
+                "signature": signature.group(0)[:120],
+                "assignment_count": len(env_assignments) if path == "/.env" else None,
+            },
+            "detail": f"Sensitive configuration signature returned from `{path}` without a soft-error HTML response.",
+        }
+    except Exception:
+        return None
 
 def check_sqli_single(target, payload):
     try:
@@ -1038,12 +1158,17 @@ def check_sqli_single(target, payload):
                 s2 = time.perf_counter()
                 requests.get(target, headers=get_stealth_headers(), timeout=12, verify=False)
                 el2 = time.perf_counter() - s2
-                if el2 >= 4.0 and (el2 - baseline) >= 3.0:
+                s3 = time.perf_counter()
+                control_after_response = requests.get(control_url, headers=get_stealth_headers(), timeout=8, verify=False)
+                control_after = time.perf_counter() - s3
+                if (el2 >= 4.0 and (el2 - baseline) >= 3.0
+                        and control_after_response.status_code < 500
+                        and control_after <= baseline + 2.0):
                     return {"type": "SQLI_TIME", "url": target, "severity": "CRITICAL", "confidence": "HIGH",
                             "verification_method": "controlled-timing",
-                            "verification_evidence": {"control_url": control_url, "baseline_samples": [round(x, 3) for x in baseline_samples], "baseline_seconds": round(baseline, 3), "delay1_seconds": round(el, 3), "delay2_seconds": round(el2, 3), "independent_repeats": True},
+                            "verification_evidence": {"control_url": control_url, "baseline_samples": [round(x, 3) for x in baseline_samples], "baseline_seconds": round(baseline, 3), "delay1_seconds": round(el, 3), "delay2_seconds": round(el2, 3), "post_control_seconds": round(control_after, 3), "independent_repeats": True},
                             "verified": True,
-                            "detail": f"Baseline:{baseline:.1f}s Delay1:{el:.1f}s Delay2:{el2:.1f}s (verified)"}
+                            "detail": f"Baseline:{baseline:.1f}s Delay1:{el:.1f}s Delay2:{el2:.1f}s ControlAfter:{control_after:.1f}s (verified)"}
             return None  # Slow server, not SQLi
     except Exception: pass
 
@@ -1167,51 +1292,87 @@ SECRET_REGEXES = {
 
 def check_js_secrets(url):
     findings = []
+    seen = set()
+    placeholder_values = {"example", "changeme", "your_api_key", "your-key",
+                          "replace_me", "undefined", "null", "test", "dummy"}
     try:
-        r = requests.get(url, headers=get_stealth_headers(), timeout=5, verify=False)
+        r = requests.get(url, headers=get_stealth_headers(), timeout=5,
+                         verify=False, allow_redirects=False)
+        if r.status_code >= 400:
+            return None
         html = r.text
-        
-        # Helper to process text for secrets
+
         def extract_secrets(source_text, source_url):
             for name, pattern in SECRET_REGEXES.items():
                 matches = re.findall(pattern, source_text)
-                for m in set(matches):
+                for match in set(matches):
+                    value = match[1] if isinstance(match, tuple) else match
+                    value = str(value).strip()
+                    if (not value or value.lower() in placeholder_values
+                            or value.lower().startswith("your_")):
+                        continue
+                    identity = (name, value)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+
                     if name == "GOOGLE_MAPS_KEY":
-                        # VERIFY the Google Maps key
-                        test_url = f"https://maps.googleapis.com/maps/api/staticmap?center=45%2C10&zoom=7&size=400x400&key={m}"
+                        # A 200 Static Maps response proves the key is valid,
+                        # not that it is unrestricted or reportable.
+                        test_url = ("https://maps.googleapis.com/maps/api/staticmap?"
+                                    f"center=45%2C10&zoom=7&size=400x400&key={value}")
                         try:
-                            r_test = requests.get(test_url, timeout=5)
-                            if r_test.status_code == 200:
+                            key_response = requests.get(test_url, timeout=5)
+                            if key_response.status_code == 200:
                                 findings.append({
-                                    "type": "VULNERABLE_GOOGLE_MAPS_KEY",
+                                    "type": "GOOGLE_MAPS_KEY_CANDIDATE",
                                     "url": source_url,
-                                    "severity": "HIGH",
-                                    "confidence": "HIGH",
-                                    "detail": f"Key {m} has UNRESTRICTED StaticMap API access (Billing Abuse possible)"
+                                    "severity": "LOW",
+                                    "confidence": "MEDIUM",
+                                    "verified": False,
+                                    "verification_method": "provider-key-validity",
+                                    "verification_evidence": {
+                                        "deterministic": False,
+                                        "provider": "Google Maps",
+                                        "key_valid": True,
+                                        "restriction_status": "unknown",
+                                    },
+                                    "detail": "Google Maps key is active; application/API restrictions require separate project-owner validation.",
                                 })
-                        except: pass
+                        except requests.RequestException:
+                            pass
                     else:
+                        severity = "HIGH" if name in {"AWS_API_KEY", "STRIPE_KEY"} else "MEDIUM"
                         findings.append({
                             "type": f"EXPOSED_SECRET_{name}",
                             "url": source_url,
-                            "severity": "CRITICAL",
-                            "confidence": "HIGH",
-                            "detail": f"Found {name} in source"
+                            "severity": severity,
+                            "confidence": "MEDIUM",
+                            "verified": False,
+                            "verification_method": "source-secret-pattern",
+                            "verification_evidence": {
+                                "deterministic": False,
+                                "secret_type": name,
+                                "source_url": source_url,
+                                "secret_value_redacted": f"{value[:4]}***{value[-3:]}",
+                            },
+                            "detail": f"Potential {name} found in source; validate ownership, scope, and whether it is active before reporting.",
                         })
-                        
-        # 1. Check the main HTML page
+
         extract_secrets(html, url)
-        
-        # 2. Check all included external scripts
-        scripts = re.findall(r'<script[^>]+src="([^">]+)"', html)
-        for s in scripts:
-            if not s.startswith("http"):
-                s = urlparse(url).scheme + "://" + urlparse(url).hostname + ("/" + s if not s.startswith("/") else s)
+        scripts = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', html)
+        for script in scripts:
+            source_url = urljoin(url, script)
             try:
-                sr = requests.get(s, headers=get_stealth_headers(), timeout=5, verify=False)
-                extract_secrets(sr.text, s)
-            except: pass
-    except: pass
+                script_response = requests.get(source_url, headers=get_stealth_headers(),
+                                               timeout=5, verify=False,
+                                               allow_redirects=False)
+                if script_response.status_code < 400:
+                    extract_secrets(script_response.text, source_url)
+            except requests.RequestException:
+                pass
+    except requests.RequestException:
+        pass
     return findings if findings else None
 
 def check_tech_stack_routing(url):

@@ -1,6 +1,6 @@
 import requests
 from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
-from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER
+from . import utils
 
 def run_lfi_fuzzer(url):
     """
@@ -11,8 +11,8 @@ def run_lfi_fuzzer(url):
     if "?" not in url: return findings
     
     headers = {}
-    if GLOBAL_COOKIE: headers["Cookie"] = GLOBAL_COOKIE
-    if GLOBAL_BEARER: headers["Authorization"] = f"Bearer {GLOBAL_BEARER}"
+    if utils.GLOBAL_COOKIE: headers["Cookie"] = utils.GLOBAL_COOKIE
+    if utils.GLOBAL_BEARER: headers["Authorization"] = f"Bearer {utils.GLOBAL_BEARER}"
 
     parsed = urlparse(url)
     params = parse_qsl(parsed.query)
@@ -32,14 +32,26 @@ def run_lfi_fuzzer(url):
             
             try:
                 r = requests.get(test_url, headers=headers, timeout=5, verify=False)
-                if signature in r.text:
+                content_type = r.headers.get("Content-Type", "").lower()
+                body = r.text
+                if (r.status_code == 200 and signature in body
+                        and "text/html" not in content_type
+                        and not body.lstrip().lower().startswith("<html")):
                     findings.append({
                         "type": "LOCAL_FILE_INCLUSION",
                         "url": test_url,
+                        "parameter": k,
                         "severity": "CRITICAL",
                         "confidence": "HIGH",
                         "verified": True,
-                        "detail": f"Critical LFI/Directory Traversal! Extracted local system file via parameter `{k}` using payload `{payload}`."
+                        "verification_method": "local-file-signature",
+                        "verification_evidence": {
+                            "deterministic": True,
+                            "signature": signature,
+                            "status": r.status_code,
+                            "content_type": content_type,
+                        },
+                        "detail": f"Local file signature returned through parameter `{k}` using payload `{payload}`."
                     })
                     return findings
             except Exception: pass

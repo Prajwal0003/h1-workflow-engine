@@ -1,6 +1,8 @@
+import re
 import subprocess
+import sys
 from pathlib import Path
-from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER
+from . import utils
 
 def run_commix_scan(url):
     """
@@ -15,7 +17,7 @@ def run_commix_scan(url):
     print(f"[*] Dispatching Commix Agent to test Command Injection on: {url}")
     
     cmd = [
-        "python", str(commix_py.absolute()),
+        sys.executable, str(commix_py.absolute()),
         "--url", url,
         "--batch", 
         "--level=1",
@@ -23,24 +25,31 @@ def run_commix_scan(url):
         "--os-cmd=id"
     ]
     
-    if GLOBAL_COOKIE:
-        cmd.extend(["--cookie", GLOBAL_COOKIE])
-    if GLOBAL_BEARER:
-        cmd.extend(["--headers", f"Authorization: Bearer {GLOBAL_BEARER}"])
+    if utils.GLOBAL_COOKIE:
+        cmd.extend(["--cookie", utils.GLOBAL_COOKIE])
+    if utils.GLOBAL_BEARER:
+        cmd.extend(["--headers", f"Authorization: Bearer {utils.GLOBAL_BEARER}"])
         
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         output = result.stdout.lower()
-        
-        # Commix usually prints out "(*nix)" or "Windows" or "uid=" when 'id' works
-        if "is vulnerable" in output or "uid=" in output or "pseudo-terminal" in output:
+        uid_match = re.search(r"\buid=\d+", output)
+        shell_marker = "pseudo-terminal" in output and ("shell" in output or "command" in output)
+        if result.returncode == 0 and ("is vulnerable" in output or uid_match or shell_marker):
             findings.append({
                 "type": "COMMIX_CONFIRMED_CMD_INJECTION",
                 "url": url,
                 "severity": "CRITICAL",
                 "confidence": "HIGH",
                 "verified": True,
-                "detail": "Commix confirmed a critical OS Command Injection vulnerability. Arbitrary code execution is possible."
+                "verification_method": "commix-confirmed",
+                "verification_evidence": {
+                    "deterministic": True,
+                    "tool": "commix",
+                    "success_markers": ["is vulnerable", "uid=", "pseudo-terminal"],
+                    "output_excerpt": result.stdout[-1200:],
+                },
+                "detail": "Commix confirmed command injection. Review the attached tool evidence before submission."
             })
             
     except subprocess.TimeoutExpired:

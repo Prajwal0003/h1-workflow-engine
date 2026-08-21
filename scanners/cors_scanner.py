@@ -1,5 +1,5 @@
 import requests
-from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER
+from . import utils
 
 def check_cors_misconfig(url):
     """
@@ -8,8 +8,8 @@ def check_cors_misconfig(url):
     """
     findings = []
     headers = {"Origin": "https://evil.com"}
-    if GLOBAL_COOKIE: headers["Cookie"] = GLOBAL_COOKIE
-    if GLOBAL_BEARER: headers["Authorization"] = f"Bearer {GLOBAL_BEARER}"
+    if utils.GLOBAL_COOKIE: headers["Cookie"] = utils.GLOBAL_COOKIE
+    if utils.GLOBAL_BEARER: headers["Authorization"] = f"Bearer {utils.GLOBAL_BEARER}"
     
     try:
         r = requests.get(url, headers=headers, timeout=5, verify=False)

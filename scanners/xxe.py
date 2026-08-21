@@ -37,14 +37,27 @@ def check_xxe(url):
             if not r:
                 continue
 
-            # Check for file content in response
-            if "root:x:0:0:" in r.text or "daemon:x:1:" in r.text:
+            # Check for file content in a non-HTML response. A precise file
+            # signature is stronger than a generic 200 or XML content-type.
+            signature = next((value for value in ("root:x:0:0:", "daemon:x:1:") if value in r.text), None)
+            content_type = r.headers.get("Content-Type", "").lower()
+            if (r.status_code == 200 and signature
+                    and "text/html" not in content_type
+                    and not r.text.lstrip().lower().startswith("<html")):
                 findings.append({
                     "type": "XXE_FILE_READ",
                     "url": target,
                     "severity": "CRITICAL",
                     "confidence": "HIGH",
-                    "detail": "Successfully read /etc/passwd via XXE"
+                    "verified": True,
+                    "verification_method": "xxe-file-signature",
+                    "verification_evidence": {
+                        "deterministic": True,
+                        "signature": signature,
+                        "status": r.status_code,
+                        "content_type": content_type,
+                    },
+                    "detail": "Local file signature returned from an XML request via XXE.",
                 })
                 return findings
 

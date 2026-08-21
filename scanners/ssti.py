@@ -1,49 +1,77 @@
-"""
-SSTI Scanner — Server-Side Template Injection detection.
-Ref: awesome-bugbounty-tools (tplmap, SSTImap).
-"""
-from urllib.parse import urlparse, urlencode
-from .utils import stealth_headers, safe_get
+"""SSTI scanner with reflection-aware, multi-payload confirmation."""
 
-SSTI_PAYLOADS = {
-    "{{7*7}}": "49",
-    "{{7*'7'}}": "7777777",
-    "${7*7}": "49",
-    "#{7*7}": "49",
-    "<%= 7*7 %>": "49",
-    "{{config}}": "SECRET_KEY",
-    "{{self.__class__}}": "__class__",
-    "${T(java.lang.Runtime)}": "java.lang.Runtime",
-    "{{request.application.__globals__}}": "__builtins__",
-}
+import secrets
+from urllib.parse import urlencode, urlparse, urlunparse
+
+from .utils import safe_get
+
 
 SSTI_PARAMS = ["name", "template", "page", "view", "q", "search", "msg", "text", "content"]
+SSTI_PAYLOADS = [
+    ("{{7*7}}", "49"),
+    ("${7*7}", "49"),
+    ("<%= 7*7 %>", "49"),
+]
+
+
+def _make_url(parsed, params):
+    return urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        parsed.params,
+        urlencode(params),
+        parsed.fragment,
+    ))
 
 
 def check_ssti(url):
-    """Test URL parameters for SSTI using math-expression polyglot payloads."""
+    """Test common parameters for server-side expression evaluation."""
     findings = []
     parsed = urlparse(url)
     base = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
 
     for param in SSTI_PARAMS[:5]:
-        for payload, expected in list(SSTI_PAYLOADS.items())[:5]:
-            target = f"{base}?{param}={payload}"
-            r = safe_get(target)
-            if not r:
-                continue
+        marker = f"H1SSTI{secrets.token_hex(5)}"
+        baseline = safe_get(_make_url(parsed, [(param, f"{marker}BASE")]))
+        if not baseline:
+            continue
 
-            if expected in r.text:
-                # Verify it's not just reflecting the payload literally
-                if payload not in r.text or expected != payload:
-                    severity = "CRITICAL" if "config" in payload or "__globals__" in expected else "HIGH"
-                    findings.append({
-                        "type": "SSTI",
-                        "url": target,
-                        "severity": severity,
-                        "confidence": "HIGH",
-                        "detail": f"Template injection confirmed: {payload} → {expected}"
-                    })
-                    return findings
+        confirmed = []
+        for payload, result in SSTI_PAYLOADS:
+            response = safe_get(_make_url(parsed, [(param, f"{payload}{marker}")]))
+            if not response or response.status_code >= 400:
+                continue
+            expected = f"{result}{marker}"
+            body = response.text
+            if (expected in body
+                    and f"{payload}{marker}" not in body
+                    and body.count(expected) > baseline.text.count(expected)):
+                confirmed.append({
+                    "payload": payload,
+                    "expected": expected,
+                    "status": response.status_code,
+                })
+
+        if len(confirmed) >= 2:
+            findings.append({
+                "type": "SSTI",
+                "url": base,
+                "parameter": param,
+                "severity": "HIGH",
+                "confidence": "HIGH",
+                "verified": True,
+                "verification_method": "ssti-multi-payload",
+                "verification_evidence": {
+                    "deterministic": True,
+                    "payload_count": len(confirmed),
+                    "payloads": [item["payload"] for item in confirmed],
+                    "marker": marker,
+                    "baseline_status": baseline.status_code,
+                },
+                "detail": (f"Two template syntaxes evaluated on parameter `{param}` with "
+                           f"unique marker `{marker}`; literal reflection was not observed."),
+            })
+            return findings
 
     return findings if findings else None

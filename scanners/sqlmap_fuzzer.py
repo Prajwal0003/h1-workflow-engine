@@ -1,8 +1,8 @@
+import re
 import subprocess
-import os
-import random
+import sys
 from pathlib import Path
-from scanners.utils import GLOBAL_COOKIE, GLOBAL_BEARER
+from . import utils
 
 def run_sqlmap_scan(url):
     """
@@ -22,7 +22,7 @@ def run_sqlmap_scan(url):
     # We use batch mode, random agent, fastest risk level, and --smart 
     # to only test parameters that are heuristics-positive for injection.
     cmd = [
-        "python", str(sqlmap_py.absolute()),
+        sys.executable, str(sqlmap_py.absolute()),
         "-u", url,
         "--batch",
         "--random-agent",
@@ -33,32 +33,34 @@ def run_sqlmap_scan(url):
         "--dbs" # Try to extract databases if vulnerable
     ]
     
-    if GLOBAL_COOKIE:
-        cmd.extend(["--cookie", GLOBAL_COOKIE])
-    if GLOBAL_BEARER:
-        cmd.extend(["--headers", f"Authorization: Bearer {GLOBAL_BEARER}"])
+    if utils.GLOBAL_COOKIE:
+        cmd.extend(["--cookie", utils.GLOBAL_COOKIE])
+    if utils.GLOBAL_BEARER:
+        cmd.extend(["--headers", f"Authorization: Bearer {utils.GLOBAL_BEARER}"])
     
     try:
         # Run sqlmap with a hard timeout of 10 minutes to prevent hanging
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         
         output = result.stdout.lower()
-        
-        if "is vulnerable" in output or "available databases" in output:
-            
-            # Try to extract the vulnerable parameter name from the output
-            vuln_param = "Unknown Parameter"
-            for line in result.stdout.splitlines():
-                if "parameter '" in line and "' is vulnerable" in line:
-                    vuln_param = line.split("parameter '")[1].split("'")[0]
-            
+        vuln_match = re.search(r"parameter ['\"]([^'\"]+)['\"].{0,120}is vulnerable", result.stdout, re.I | re.S)
+        vuln_param = vuln_match.group(1) if vuln_match else None
+        if result.returncode == 0 and vuln_param and "is vulnerable" in output:
             findings.append({
                 "type": "SQLMAP_CONFIRMED_SQLI",
                 "url": url,
                 "severity": "CRITICAL",
                 "confidence": "HIGH",
-                "verified": True, # Hard-verified by SQLmap
-                "detail": f"SQLMap confirmed a critical SQL Injection on parameter '{vuln_param}'. Exploit successful."
+                "verified": True,
+                "verification_method": "sqlmap-confirmed",
+                "verification_evidence": {
+                    "deterministic": True,
+                    "tool": "sqlmap",
+                    "parameter": vuln_param,
+                    "success_markers": ["is vulnerable", "available databases"],
+                    "output_excerpt": result.stdout[-1200:],
+                },
+                "detail": f"SQLMap confirmed SQL injection on parameter '{vuln_param}'. Review the attached tool evidence before submission."
             })
             
     except subprocess.TimeoutExpired:

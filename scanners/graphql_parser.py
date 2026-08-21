@@ -1,7 +1,8 @@
-import requests
 import json
 import logging
 from urllib.parse import urlparse
+
+import requests
 
 def check_graphql(url):
     findings = []
@@ -34,9 +35,15 @@ def check_graphql(url):
                     "type": "GRAPHQL_INTROSPECTION",
                     "url": target_url,
                     "detail": "GraphQL Introspection is enabled. This exposes the entire API schema.",
-                    "severity": "HIGH",
-                    "confidence": "HIGH",
-                    "verified": True
+                    "severity": "MEDIUM",
+                    "confidence": "MEDIUM",
+                    "verified": False,
+                    "verification_method": "graphql-introspection",
+                    "verification_evidence": {
+                        "deterministic": False,
+                        "schema_exposed": True,
+                        "impact": "not_established",
+                    }
                 })
                 # We only need to find it once per host
                 break
@@ -48,8 +55,13 @@ def check_graphql(url):
                     "url": target_url,
                     "detail": "Hidden GraphQL endpoint discovered, but introspection is disabled.",
                     "severity": "LOW",
-                    "confidence": "HIGH",
-                    "verified": True
+                    "confidence": "LOW",
+                    "verified": False,
+                    "verification_method": "graphql-endpoint-discovery",
+                    "verification_evidence": {
+                        "deterministic": False,
+                        "introspection_disabled": True,
+                    }
                 })
                 break
                 

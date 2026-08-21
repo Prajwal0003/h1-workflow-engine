@@ -61,6 +61,10 @@ def finding_family(vulnerability_type: Any) -> str:
         return "EXPOSED_SECRET"
     if value.startswith("SQLI") or value.startswith("SQLMAP_"):
         return "SQLI"
+    if value.startswith("SSTI"):
+        return "SSTI"
+    if "SSRF" in value:
+        return "SSRF"
     if value.startswith("IDOR"):
         return "IDOR"
     if "TAKEOVER" in value:
@@ -162,6 +166,21 @@ def has_deterministic_evidence(finding: dict[str, Any]) -> bool:
     if family == "GRAPHQL":
         # Introspection/schema exposure alone is not an exploit proof.
         return False
+    if family in {"SSTI", "SSTI_RCE"}:
+        return method == "ssti-multi-payload" and isinstance(evidence, dict) and (
+            evidence.get("deterministic") is True and
+            int(evidence.get("payload_count", 0) or 0) >= 2
+        )
+    if family == "SSRF":
+        return method == "metadata-signature-with-control" and isinstance(evidence, dict) and (
+            evidence.get("deterministic") is True and
+            evidence.get("control_signature_absent") is True
+        )
+    if family == "HOST_HEADER_INJECTION":
+        return method == "host-header-redirect" and isinstance(evidence, dict) and (
+            evidence.get("deterministic") is True and
+            evidence.get("attacker_host") and evidence.get("location")
+        )
     if family == "IDOR":
         return method == "dual-session" and isinstance(evidence, dict) and bool(
             evidence.get("subject_a") and evidence.get("subject_b") and
@@ -191,10 +210,20 @@ def has_deterministic_evidence(finding: dict[str, Any]) -> bool:
             evidence.get("provider_fingerprint") is True
         )
 
-    # Generic scanners may become reportable only when they provide explicit
-    # structured verification evidence. Free-form AI proof is intentionally not
-    # accepted here.
-    return bool(method and isinstance(evidence, dict) and evidence.get("deterministic") is True)
+    # Generic scanners may become reportable only through an explicitly
+    # reviewed verification method. Free-form AI proof or an arbitrary new
+    # scanner flag is intentionally not accepted here.
+    approved_methods = {
+        "dalfox-confirmed",
+        "config-file-signature",
+        "local-file-signature",
+        "xxe-file-signature",
+        "jwt-alg-none-controls",
+        "sqlmap-confirmed",
+        "commix-confirmed",
+    }
+    return (method in approved_methods and isinstance(evidence, dict)
+            and evidence.get("deterministic") is True)
 
 
 def readiness_reasons(finding: dict[str, Any]) -> list[str]:

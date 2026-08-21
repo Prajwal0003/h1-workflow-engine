@@ -36,15 +36,28 @@ def stealth_headers():
         headers["Authorization"] = f"Bearer {GLOBAL_BEARER}"
     return headers
 
+def _request_headers(overrides=None):
+    """Merge scanner-specific headers with the shared authentication context."""
+    headers = stealth_headers()
+    if overrides:
+        headers.update(overrides)
+    return headers
+
+
 def safe_get(url, timeout=5, **kwargs):
     try:
-        return requests.get(url, headers=stealth_headers(), timeout=timeout, verify=False, **kwargs)
+        overrides = kwargs.pop("headers", None)
+        return requests.get(url, headers=_request_headers(overrides), timeout=timeout,
+                            verify=False, **kwargs)
     except Exception:
         return None
 
+
 def safe_post(url, timeout=5, **kwargs):
     try:
-        return requests.post(url, headers=stealth_headers(), timeout=timeout, verify=False, **kwargs)
+        overrides = kwargs.pop("headers", None)
+        return requests.post(url, headers=_request_headers(overrides), timeout=timeout,
+                             verify=False, **kwargs)
     except Exception:
         return None
 

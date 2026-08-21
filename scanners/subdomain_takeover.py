@@ -1,5 +1,8 @@
+from urllib.parse import urlparse
+
 import dns.resolver
 import requests
+
 
 TAKEOVER_SIGNATURES = {
     "s3.amazonaws.com": "NoSuchBucket",
@@ -9,40 +12,63 @@ TAKEOVER_SIGNATURES = {
     "zendesk.com": "Help Center Closed",
     "pantheonsite.io": "The lack of site indicates",
     "wpengine.com": "Do you want to register",
-    "fastly.net": "Fastly error: unknown domain"
+    "fastly.net": "Fastly error: unknown domain",
 }
 
+
 def check_subdomain_takeover(url):
-    """
-    Analyzes the DNS CNAME records of the target to find dangling subdomains
-    that point to unclaimed cloud services (S3, Github, Shopify).
-    """
+    """Find dangling provider CNAMEs with an HTTP provider fingerprint."""
     findings = []
-    domain = url.split("//")[-1].split("/")[0]
-    
+    parsed = urlparse(url)
+    domain = (parsed.hostname or "").rstrip(".").lower()
+    if not domain:
+        return findings
+
     try:
-        answers = dns.resolver.resolve(domain, 'CNAME')
-        for rdata in answers:
-            cname = str(rdata.target).rstrip('.').lower()
-            
-            for vulnerable_cname, error_msg in TAKEOVER_SIGNATURES.items():
-                if vulnerable_cname in cname:
-                    print(f"[*] Subdomain Takeover Engine investigating potential dangling CNAME: {cname} on {domain}")
-                    try:
-                        # Verify it's actually unclaimed by fetching HTTP and checking the signature
-                        r = requests.get(f"http://{domain}", timeout=5, verify=False)
-                        if error_msg in r.text:
-                            findings.append({
-                                "type": "SUBDOMAIN_TAKEOVER",
-                                "url": url,
-                                "severity": "CRITICAL",
-                                "confidence": "HIGH",
-                                "verified": True,
-                                "detail": f"Subdomain {domain} is pointing to an unclaimed {vulnerable_cname} service via CNAME ({cname})! Immediate takeover is possible."
-                            })
-                    except Exception:
-                        pass
+        answers = dns.resolver.resolve(domain, "CNAME", lifetime=5)
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN,
+            dns.resolver.NoNameservers, dns.exception.Timeout):
+        return findings
     except Exception:
-        pass
-        
+        return findings
+
+    for rdata in answers:
+        cname = str(rdata.target).rstrip(".").lower()
+        provider = next((name for name in TAKEOVER_SIGNATURES
+                         if cname == name or cname.endswith(f".{name}")), None)
+        if not provider:
+            continue
+
+        fingerprint = TAKEOVER_SIGNATURES[provider]
+        try:
+            response = requests.get(url, timeout=5, verify=False,
+                                    allow_redirects=False,
+                                    headers={"User-Agent": "Aegis-Auto/Takeover"})
+        except requests.RequestException:
+            continue
+
+        if fingerprint not in response.text:
+            continue
+
+        findings.append({
+            "type": "SUBDOMAIN_TAKEOVER",
+            "url": url,
+            "severity": "HIGH",
+            "confidence": "HIGH",
+            "verified": True,
+            "verification_method": "provider-fingerprint-and-claimability",
+            "verification_evidence": {
+                "deterministic": True,
+                "claimable_service": True,
+                "provider_fingerprint": True,
+                "provider": provider,
+                "cname": cname,
+                "fingerprint": fingerprint,
+                "status": response.status_code,
+            },
+            "detail": (f"CNAME `{cname}` points to provider `{provider}` and the response "
+                       f"contains its unclaimed-service fingerprint."),
+        })
+        return findings
+
     return findings
