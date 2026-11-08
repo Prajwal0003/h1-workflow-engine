@@ -5,8 +5,12 @@ on:
     - cron: '0 0 * * *' # Run daily at midnight
   workflow_dispatch:      # Allow manual trigger
 
+permissions:
+  contents: read
+
 jobs:
   scan:
+    if: vars.ENABLE_LIVE_SCANS == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
