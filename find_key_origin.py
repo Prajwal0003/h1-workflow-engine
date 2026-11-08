@@ -1,3 +1,4 @@
+import os
 import requests
 import urllib3
 import time
@@ -32,5 +33,7 @@ def find_key_in_domains(key_to_find):
     return None
 
 if __name__ == "__main__":
-    key = "AIzaSyDBkjlmLFquI4TIAl4tjyReQPV8vXWl4wk"
+    key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    if not key:
+        raise SystemExit("Supply GOOGLE_MAPS_API_KEY for an authorized test.")
     find_key_in_domains(key)

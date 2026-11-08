@@ -1,9 +1,10 @@
+import os
 import requests
 import argparse
 import sys
 
 def verify_gmaps_key(api_key):
-    print(f"[*] Testing Google Maps API Key: {api_key}")
+    print("[*] Testing the supplied Google Maps API key.")
     
     vuln_count = 0
     
@@ -41,7 +42,7 @@ def verify_gmaps_key(api_key):
                     print(f"  [-] {name}: Unexpected Status {r.status_code}")
                     
         except Exception as e:
-            print(f"  [-] Error testing {name}: {e}")
+            print(f"  [-] Error testing {name}: {type(e).__name__}")
 
     if vuln_count > 0:
         print(f"\n[!!!] CONCLUSION: API Key is VULNERABLE to {vuln_count} services. High potential for financial impact (Billing abuse)!")
@@ -55,8 +56,7 @@ if __name__ == "__main__":
     parser.add_argument("-k", "--key", help="Google Maps API Key to test")
     args = parser.parse_args()
     
-    if args.key:
-        verify_gmaps_key(args.key)
-    else:
-        # Default test from the discord alert
-        verify_gmaps_key("AIzaSyDe8cSSAnIS6ns7wc89l4Kph2kRJvWJ26A")
+    key = args.key or os.environ.get("GOOGLE_MAPS_API_KEY")
+    if not key:
+        parser.error("Supply GOOGLE_MAPS_API_KEY or --key for an authorized test.")
+    verify_gmaps_key(key)

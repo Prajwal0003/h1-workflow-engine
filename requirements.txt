@@ -6,3 +6,4 @@ dnspython
 flask
 neo4j
 playwright
+beautifulsoup4

@@ -17,29 +17,30 @@ services:
   freellmapi:
     image: ghcr.io/tashfeenahmed/freellmapi:latest
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     volumes:
       - ./data/freellmapi:/app/server/data
     environment:
-      - ENCRYPTION_KEY=${FREELLMAPI_ENCRYPTION_KEY:-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855}
+      - ENCRYPTION_KEY=${FREELLMAPI_ENCRYPTION_KEY:?Set FREELLMAPI_ENCRYPTION_KEY}
       - PORT=3001
     restart: unless-stopped
 
   neo4j:
     image: neo4j:latest
     environment:
-      - NEO4J_AUTH=neo4j/password123
-    ports:
-      - "7474:7474"
-      - "7687:7687"
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD}
     volumes:
       - ./data/neo4j:/data
 
   config-ui:
     build: .
+    profiles: ["config"]
     command: ["python", "config_app.py"]
+    environment:
+      H1_CONFIG_BIND: 0.0.0.0
+      H1_CONFIG_TOKEN: ${H1_CONFIG_TOKEN:-}
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     volumes:
       - ./:/app
 

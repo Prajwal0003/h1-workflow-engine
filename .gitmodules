@@ -1,0 +1,12 @@
+[submodule "ext/mantishack"]
+	path = ext/mantishack
+	url = https://github.com/deonmenezes/mantishack.git
+[submodule "tools/medium-writeups"]
+	path = tools/medium-writeups
+	url = https://github.com/rix4uni/medium-writeups.git
+[submodule "tools/sqlmap"]
+	path = tools/sqlmap
+	url = https://github.com/sqlmapproject/sqlmap.git
+[submodule "tools/xsstrike"]
+	path = tools/xsstrike
+	url = https://github.com/s0md3v/XSStrike.git

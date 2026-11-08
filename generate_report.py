@@ -1,3 +1,5 @@
+from html import escape
+from urllib.parse import urlsplit
 import json
 from pathlib import Path
 from datetime import datetime
@@ -77,12 +79,20 @@ def generate_html(json_file="data/autopilot/latest_fast_scan.json", out_file="da
     data.sort(key=lambda x: severity_order.get(x.get("severity", "LOW"), 99))
 
     for item in data:
-        sev = item.get("severity", "UNKNOWN")
+        raw_sev = item.get("severity", "UNKNOWN")
+        sev = raw_sev if raw_sev in severity_order else "UNKNOWN"
+        item = {k: escape(str(v), quote=True) for k, v in item.items()}
+        raw_url = str(item.get("url", ""))
+        try:
+            parsed = urlsplit(raw_url)
+            safe_url = raw_url if parsed.scheme in ("http", "https") and parsed.hostname else "#"
+        except ValueError:
+            safe_url = "#"
         html += f"""
             <tr>
                 <td><span class="badge badge-{sev}">{sev}</span></td>
                 <td>{item.get("type", "Unknown")}</td>
-                <td><a href="{item.get("url", "#")}" style="color: #1e90ff; text-decoration: none;" target="_blank">{item.get("url", "-")}</a></td>
+                <td><a href="{safe_url}" style="color: #1e90ff; text-decoration: none;" target="_blank" rel="noopener noreferrer">{item.get("url", "-")}</a></td>
                 <td>{item.get("program", "-")}</td>
                 <td>{item.get("detail", "-")}</td>
             </tr>
