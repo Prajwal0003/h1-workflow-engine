@@ -88,20 +88,8 @@ try:
     from scanners.waf_evasion import run_waf_evasion
     from modules.payload_extractor import extract_payloads
     
-    # Dynamically load AI-generated custom tools
-    import importlib
-    import pkgutil
-    import scanners.custom_tools
+    # Extensions require manual source review and explicit integration.
     CUSTOM_SCANNERS = []
-    for _, module_name, _ in pkgutil.iter_modules(scanners.custom_tools.__path__):
-        try:
-            mod = importlib.import_module(f"scanners.custom_tools.{module_name}")
-            for attr in dir(mod):
-                if attr.startswith("run_"):
-                    CUSTOM_SCANNERS.append(getattr(mod, attr))
-        except Exception as e:
-            print(f"[!] Failed to load custom tool {module_name}: {e}")
-            
     SCANNERS_LOADED = True
 except ImportError as e:
     print(f"[!] Some scanner modules not loaded: {e}")
@@ -163,6 +151,7 @@ if Path(".env").exists():
             k, v = line.split("=", 1)
             ENV_VARS[k.strip()] = v.strip()
 
+ENV_VARS.update(os.environ)
 DISCORD_WEBHOOK_URL = ENV_VARS.get("DISCORD_WEBHOOK_URL", "")
 GEMINI_API_KEY = ENV_VARS.get("GEMINI_API_KEY", "")
 GEMINI_API_KEY = ENV_VARS.get("GEMINI_API_KEY", "").strip('"\'')
@@ -184,7 +173,7 @@ FREELLMAPI_KEY = ENV_VARS.get("FREELLMAPI_KEY", "")
 INTERACTSH_URL = ENV_VARS.get("INTERACTSH_URL", "")
 NEO4J_URI = ENV_VARS.get("NEO4J_URI", "bolt://neo4j:7687")
 NEO4J_USER = ENV_VARS.get("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = ENV_VARS.get("NEO4J_PASSWORD", "password123")
+NEO4J_PASSWORD = ENV_VARS.get("NEO4J_PASSWORD", "")
 
 # IDOR dual-session credentials (optional — configure per target)
 IDOR_CREDENTIALS = {}
@@ -348,7 +337,7 @@ def generate_ai_report(finding):
     except Exception as e: pass
 
 def ai_exploit_and_prove(finding):
-    """AI generates a safe PoC exploit, runs it, captures proof for the report."""
+    """Generate a review-only PoC; never execute model output automatically."""
     has_gemini = GEMINI_API_KEY and "your_" not in GEMINI_API_KEY
     from pathlib import Path
     has_claude = Path("data/anthropic_keys.txt").exists() and len(Path("data/anthropic_keys.txt").read_text().strip()) > 10
@@ -388,25 +377,20 @@ def ai_exploit_and_prove(finding):
             log(f"[!] AI PoC blocked — contains unsafe operations")
             return None
         
-        # Save and execute
+        # Save as text for operator review.
         poc_dir = Path("reports/poc")
         poc_dir.mkdir(parents=True, exist_ok=True)
         safe_type = re.sub(r'[^a-zA-Z0-9_]', '_', vuln_type)[:30]
         ts = int(time.time())
-        poc_file = poc_dir / f"poc_{safe_type}_{ts}.py"
+        poc_file = poc_dir / f"poc_{safe_type}_{ts}.py.txt"
         poc_file.write_text(script, encoding="utf-8")
         
-        log(f"[*] Running AI PoC for {vuln_type}...")
-        result = subprocess.run(
-            [sys.executable, str(poc_file)],
-            capture_output=True, text=True, timeout=20
-        )
-        
-        output = result.stdout.strip()
+        log(f"[*] Saved AI PoC for manual review: {poc_file}")
+        output = "Not executed: generated code requires manual review in an isolated environment."
         # A generated script can print this marker without proving that the
         # response actually demonstrated the claimed vulnerability. Keep AI PoC
         # status separate from the deterministic scanner verification contract.
-        ai_marker_found = "VERIFIED: VULNERABLE" in output
+        ai_marker_found = False
         
         # Save proof. The model-generated marker is useful evidence for a
         # reviewer, but is never treated as independent confirmation because
@@ -2114,14 +2098,8 @@ def main():
     backup_artifacts_to_git()
 
 def backup_artifacts_to_git():
-    if not GITHUB_BACKUP_REPO: return
-    log("[*] Backing up AI-generated Zero-Day PoCs to Git...")
-    try:
-        import subprocess
-        subprocess.run(["git", "add", "reports/poc/", "custom-templates/"], capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Auto-backup of AI-generated artifacts"], capture_output=True)
-        subprocess.run(["git", "push", "origin", "main"], capture_output=True)
-    except: pass
+    if GITHUB_BACKUP_REPO:
+        log("[*] Automatic Git backup disabled. Review and redact artifacts before publishing.")
 
 if __name__ == "__main__":
     import argparse

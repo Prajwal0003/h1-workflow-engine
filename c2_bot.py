@@ -13,8 +13,15 @@ if Path(".env").exists():
             k, v = line.split("=", 1)
             ENV_VARS[k.strip()] = v.strip()
 
-TELEGRAM_TOKEN = ENV_VARS.get("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID = ENV_VARS.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", ENV_VARS.get("TELEGRAM_BOT_TOKEN", ""))
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", ENV_VARS.get("TELEGRAM_CHAT_ID", ""))
+ALLOWED_USER_ID = os.environ.get("TELEGRAM_USER_ID", ENV_VARS.get("TELEGRAM_USER_ID", ""))
+
+def authorized_message(msg):
+    return bool(CHAT_ID and ALLOWED_USER_ID
+                and str(msg.get("chat", {}).get("id", "")) == CHAT_ID
+                and str(msg.get("from", {}).get("id", "")) == ALLOWED_USER_ID)
+
 
 def send_msg(text):
     if not TELEGRAM_TOKEN or "your_" in TELEGRAM_TOKEN: return
@@ -37,21 +44,30 @@ def run_bot():
     print("[*] Starting Telegram C2 Bot...")
     send_msg("🤖 Autopilot Bug Bounty C2 Online. Send /scan <program> to begin.")
     offset = None
+    active_scan = None
     
     while True:
         updates = get_updates(offset)
         for u in updates:
             offset = u["update_id"] + 1
             msg = u.get("message", {})
+            if not authorized_message(msg):
+                continue
             text = msg.get("text", "").strip()
             
             if text.startswith("/scan "):
-                target = text.split(" ")[1]
+                import re
+                target = text.split(maxsplit=1)[1].strip()
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}", target):
+                    continue
+                if active_scan is not None and active_scan.poll() is None:
+                    send_msg("A scan is already running.")
+                    continue
                 send_msg(f"🚀 Initializing autonomous scan on: {target}...")
                 try:
                     # Trigger autopilot
                     cmd = ["python", "autopilot.py", target]
-                    subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    active_scan = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     send_msg(f"✅ Scan kicked off in the background. You will receive notifications for CRITICAL findings.")
                 except Exception as e:
                     send_msg(f"❌ Failed to start scan: {e}")

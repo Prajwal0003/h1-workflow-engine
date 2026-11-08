@@ -1,7 +1,18 @@
 import os
-from flask import Flask, request, render_template_string
+import hmac
+import secrets
+import tempfile
+from pathlib import Path
+from threading import Lock
+from flask import Flask, abort, request, render_template_string, session
 
 app = Flask(__name__)
+app.secret_key = secrets.token_bytes(32)
+app.config.update(SESSION_COOKIE_SAMESITE="Strict", MAX_CONTENT_LENGTH=16_384)
+CONFIG_LOCK = Lock()
+FIELDS = {"H1_API_USERNAME", "H1_API_TOKEN", "DISCORD_WEBHOOK_URL", "GEMINI_API_KEY",
+          "SHODAN_API_KEY", "NOTION_API_KEY", "NOTION_DATABASE_ID", "INTERACTSH_URL",
+          "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_USER_ID"}
 
 HTML = """
 <!DOCTYPE html>
@@ -11,7 +22,7 @@ HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aegis-Auto Configuration Portal</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+
         body {
             margin: 0;
             padding: 0;
@@ -115,46 +126,50 @@ HTML = """
         <p class="subtitle">Configure your DevSecOps Pipeline Secrets</p>
         <div class="alert">✅ Settings saved successfully! The pipeline is ready.</div>
         <form method="POST">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <p>Fill only the settings you want to change. Blank fields keep their saved values.</p>
             <div class="form-group">
                 <label>HackerOne Username</label>
-                <input type="text" name="HACKERONE_USERNAME" value="{{ env.get('HACKERONE_USERNAME', '') }}" placeholder="johndoe">
+                <input type="text" name="H1_API_USERNAME" placeholder="johndoe">
             </div>
             <div class="form-group">
                 <label>HackerOne API Token</label>
-                <input type="password" name="HACKERONE_API_TOKEN" value="{{ env.get('HACKERONE_API_TOKEN', '') }}" placeholder="HackerOne API Token">
+                <input type="password" name="H1_API_TOKEN" placeholder="HackerOne API Token">
             </div>
             <div class="form-group">
                 <label>Discord Webhook URL</label>
-                <input type="password" name="DISCORD_WEBHOOK_URL" value="{{ env.get('DISCORD_WEBHOOK_URL', '') }}" placeholder="https://discord.com/api/webhooks/...">
+                <input type="password" name="DISCORD_WEBHOOK_URL" placeholder="https://discord.com/api/webhooks/...">
             </div>
             <div class="form-group">
                 <label>Gemini API Key (AI Hacker)</label>
-                <input type="password" name="GEMINI_API_KEY" value="{{ env.get('GEMINI_API_KEY', '') }}" placeholder="AIzaSy...">
+                <input type="password" name="GEMINI_API_KEY" placeholder="AIzaSy...">
             </div>
             <div class="form-group">
                 <label>Shodan API Key (Origin Hunter)</label>
-                <input type="password" name="SHODAN_API_KEY" value="{{ env.get('SHODAN_API_KEY', '') }}" placeholder="Shodan API Key">
+                <input type="password" name="SHODAN_API_KEY" placeholder="Shodan API Key">
             </div>
             <div class="form-group">
                 <label>Notion API Key (Ticketing)</label>
-                <input type="password" name="NOTION_API_KEY" value="{{ env.get('NOTION_API_KEY', '') }}" placeholder="secret_...">
+                <input type="password" name="NOTION_API_KEY" placeholder="secret_...">
             </div>
             <div class="form-group">
                 <label>Notion Database ID</label>
-                <input type="text" name="NOTION_DATABASE_ID" value="{{ env.get('NOTION_DATABASE_ID', '') }}" placeholder="Database ID">
+                <input type="text" name="NOTION_DATABASE_ID" placeholder="Database ID">
             </div>
             <div class="form-group">
                 <label>Interactsh URL (OOB Hunter)</label>
-                <input type="text" name="INTERACTSH_URL" value="{{ env.get('INTERACTSH_URL', '') }}" placeholder="xyz.interact.sh">
+                <input type="text" name="INTERACTSH_URL" placeholder="xyz.interact.sh">
             </div>
             <div class="form-group">
                 <label>Telegram Bot Token (C2)</label>
-                <input type="password" name="TELEGRAM_BOT_TOKEN" value="{{ env.get('TELEGRAM_BOT_TOKEN', '') }}" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
+                <input type="password" name="TELEGRAM_BOT_TOKEN" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
             </div>
             <div class="form-group">
                 <label>Telegram Chat ID</label>
-                <input type="text" name="TELEGRAM_CHAT_ID" value="{{ env.get('TELEGRAM_CHAT_ID', '') }}" placeholder="-100123456789">
+                <input type="text" name="TELEGRAM_CHAT_ID" placeholder="-100123456789">
             </div>
+            <label>Authorized Telegram user ID</label>
+            <input type="text" name="TELEGRAM_USER_ID">
             <button type="submit" class="btn">Deploy Configuration 🚀</button>
         </form>
     </div>
@@ -162,26 +177,45 @@ HTML = """
 </html>
 """
 
-def parse_env():
-    env_vars = {}
-    if os.path.exists(".env"):
-        with open(".env", "r") as f:
-            for line in f:
-                if "=" in line and not line.startswith("#"):
-                    k, v = line.split("=", 1)
-                    env_vars[k.strip()] = v.strip()
-    return env_vars
+def save_settings(values):
+    """Update only the supplied fields, keeping comments and other settings."""
+    path = Path(".env")
+    with CONFIG_LOCK:
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        updates = dict(values)
+        kept = [line for line in lines if line.partition("=")[0].strip() not in updates]
+        kept.extend(f"{key}={value}" for key, value in updates.items())
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=".env.", delete=False) as tmp:
+            temp_path = Path(tmp.name)
+            tmp.write("\n".join(kept) + "\n")
+        try:
+            temp_path.replace(path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    success = False
+    expected = os.environ.get("H1_CONFIG_TOKEN", "")
+    if not expected:
+        abort(503)
+    auth = request.authorization
+    if not auth or auth.username != "operator" or not hmac.compare_digest(
+            (auth.password or "").encode(), expected.encode()):
+        return "Operator authentication required", 401, {"WWW-Authenticate": 'Basic realm="H1 configuration"'}
+    csrf = session.setdefault("csrf", secrets.token_urlsafe(32))
     if request.method == "POST":
-        with open(".env", "w") as f:
-            f.write("# Aegis-Auto Configuration File\n")
-            for key, value in request.form.items():
-                f.write(f"{key}={value}\n")
-        success = True
-    return render_template_string(HTML, env=parse_env(), success=success)
+        if not hmac.compare_digest(request.form.get("csrf", "").encode(), csrf.encode()):
+            abort(403)
+        updates = {k: v for k, v in request.form.items() if k != "csrf" and v}
+        if set(updates) - FIELDS or any("\n" in v or "\r" in v or "\x00" in v for v in updates.values()):
+            abort(400)
+        if updates:
+            save_settings(updates)
+    return render_template_string(HTML, csrf=csrf, success=request.method == "POST"), 200, {
+        "Cache-Control": "no-store", "X-Frame-Options": "DENY"}
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host=os.environ.get("H1_CONFIG_BIND", "127.0.0.1"), port=5000)

@@ -9,3 +9,19 @@ scratch/
 .output/
 reports/poc/
 scanners/mantishack_features/out/
+
+# Private runtime artifacts
+.env.*
+!.env.example
+cookies*.txt
+*.log
+*.sarif
+reports/
+*_results.txt
+flag_report*.txt
+vulnerability_report.txt
+search.json
+temp_*.txt
+custom-templates/
+scanners/custom_tools/*.py
+!scanners/custom_tools/__init__.py

@@ -8,3 +8,17 @@ node_modules
 .vscode
 *.sqlite
 *.log
+
+.env
+.env.*
+!.env.example
+cookies*.txt
+venv
+.venv
+tools
+*.sarif
+*_results.txt
+flag_report*.txt
+vulnerability_report.txt
+search.json
+scanners/mantishack_features/out

@@ -1,85 +1,36 @@
-# H1-Workflow | Bug Bounty Automation Engine
+# H1 Workflow Engine
 
-A comprehensive suite of automation scripts, reconnaissance tools, and custom vulnerability scanners designed to streamline the bug bounty workflow, with a particular focus on HackerOne programs and continuous assessment.
+A Python CLI for organizing authorized HackerOne research. It can retrieve program scope, run reconnaissance, and group scan candidates by endpoint and vulnerability family. The regression suite shows how the engine decides whether a result has enough evidence for reporting.
 
-## 🚀 Core Components
+## Try the evidence checks
 
-### 1. 🎯 HackerOne Workflow CLI (`h1_workflow.py`)
-A unified command-line interface to interact directly with HackerOne.
-- **Search & Pick:** Discover and interactively select programs (`search`, `pick`).
-- **Scope Extraction:** Automatically parse and structure in-scope assets (`scope`).
-- **Disclosed Reports:** Review publicly disclosed bugs to understand program tendencies (`disclosed`).
-- **Full Recon Pipeline:** Chain scope extraction and reconnaissance in overnight modes (`pipeline`).
+Use Python 3.11 or 3.12. From a fresh checkout, create an isolated environment and install the Python dependencies:
 
-### 2. 🤖 Continuous Assessment (Autopilot)
-- **`autopilot.py` / `run_24_7.py`:** Autonomous 24/7 scanning engines that monitor assets, parse out-of-scope items, and systematically launch deep probes.
-- **`c2_bot.py` & Discord Integrations:** Remote command and control via Telegram, coupled with real-time alerting to Discord (`discord_notify.py`, `send_discord_changes.py`).
-
-### 3. 🕸️ Reconnaissance & Target Discovery
-- **Mass Recon:** Automated subdomain enumeration and port scanning (`mass_recon.py`, `visual_recon.py`).
-- **Target Analysis:** Identify high-value targets and analyze tech stacks (`analyze_targets.py`, `find_targets.py`).
-- **Secret & Key Hunting:** Scan for exposed secrets and validate Google Maps keys (`check_secrets.py`, `verify_gmaps_key.py`, `find_key_origin.py`).
-
-### 4. 🔬 Target-Specific Scanners
-Customized deep-dive tools built for specific bug bounty programs or technology stacks:
-- **Recorded Future:** `mega_rf_scanner.py`, `run_recorded_future.py`
-- **LaunchDarkly:** `deep_dive_launchdarkly.py`, `run_launchdarkly.py`
-- **Vimeo:** `vimeo_recon.py`, `vimeo_idor_test.py`
-- **Priceline / Stripchat:** `fetch_priceline.py`, `stripchat_recon.py`
-
-### 5. 🛡️ Vulnerability Verification
-Dedicated scripts to validate findings and eliminate false positives before reporting:
-- **SQLi:** `verify_sqli.py`
-- **CORS / Open Redirects:** `verify_cors.py`, `verify_open_redirects.py`
-- **Subdomain Takeover:** `verify_takeover.py`
-- **SSTI:** `verify_ssti_insightly.py`
-
-### 6. 🛡️ False-Positive Controls
-The pipeline treats every scanner result as a candidate until it has type-specific, deterministic evidence. Outputs from overlapping scanners are canonicalized and deduplicated by program, vulnerability family, endpoint, and parameter before triage. The accuracy layer now uses control responses and stronger evidence for SSTI, SSRF, JWT, host-header injection, open redirects, sensitive files, LFI, XXE, takeover, and secret detection. AI discovery, exploit analysis, and proof-of-concept generation remain enabled for eligible candidates, and their scripts/output are retained for review. AI triage and generated proof-of-concept scripts are advisory only; an AI response or a printed `VERIFIED: VULNERABLE` marker cannot promote a candidate to reportable status by itself.
-
-The automatic reporting gate currently requires stronger evidence for the highest-noise classes: CORS must show arbitrary-origin reflection, credential allowance, and a sensitive JSON response; SQLi timing must identify the exact injected parameter, alternate three payload requests with same-endpoint controls, use median timing and spread checks, and show at least two repeatable delays; open redirects must return a no-follow redirect to the attacker-controlled origin; and IDOR must use two authenticated subjects with cross-account access evidence. Unstable SQLi timing is emitted as `SQLI_TIME_CANDIDATE`, not a verified Critical finding. Other heuristic findings, including AI candidates that lack independent proof, are saved to `data/autopilot/needs_review.json` with the AI output attached for manual validation instead of triggering external alerts and tickets.
-
-Run the precision regression tests with:
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-### 7. 🛠️ Tooling & Infrastructure
-- **Tool Management:** Automatically install and update external dependencies like `naabu`, `subfinder`, `katana`, etc. (`setup_tools.py`, `install_tools.sh`, `modules/tool_updater.py`).
-- **AI Integrations:** Utilities for leveraging LLMs to parse context or find vulnerabilities (`fix_groq_to_gemini.py`, `test_ai.py`, `scanners/llm_prompt_injection.py`).
-- **Reporting:** Generate PDF reports for triagers (`generate_pdf_report.py`, `generate_report.py`).
-
-## ⚙️ Quick Start
-
-### Prerequisites
-Make sure you have Python 3.11+ installed. Ensure you configure your `.env` based on `.env.example`.
-
-```bash
-# Clone the repository
+```sh
 git clone https://github.com/Prajwal0003/h1-workflow-engine.git
 cd h1-workflow-engine
-
-# Run the automated setup script for your OS
-# For Windows:
-setup.bat
-
-# For Linux / macOS:
-chmod +x setup.sh
-./setup.sh
+python -m venv .venv
 ```
 
-### Usage Examples
-```bash
-# Search HackerOne programs interactively
-python h1_workflow.py pick
+Activate with `source .venv/bin/activate` on Linux or macOS, or `.\.venv\Scripts\Activate.ps1` in Windows PowerShell. Then run:
 
-# Run an automated deep dive on a specific program
-python h1_workflow.py pipeline <handle>
-
-# Start the continuous 24/7 autopilot scanner
-python run_24_7.py
+```sh
+python -m pip install -r requirements.txt
+python h1_workflow.py --help
+python -m unittest discover -s tests -v
 ```
 
----
-*Disclaimer: This repository is intended strictly for authorized, ethical bug bounty research. Do not use these tools on programs or targets where you do not have explicit permission to test.*
+The regression tests use synthetic inputs and mocked responses. They need no target, account credentials, external scanner binaries or browser installation. For example, the SQL timing tests compare repeated injected requests against control requests. An unstable baseline leaves the result in the review queue. The report gate also rejects an AI-generated success marker as independent evidence.
+
+## Project map
+
+| Entry point | Purpose |
+| --- | --- |
+| [h1_workflow.py](h1_workflow.py) | Program search, scope, disclosed reports, reconnaissance and dashboard commands |
+| [modules/finding_quality.py](modules/finding_quality.py) | Deduplication, evidence checks and readiness decisions |
+| [tests/test_precision_controls.py](tests/test_precision_controls.py) | Reproducible examples of evidence thresholds and false positives |
+| [autopilot.py](autopilot.py) | Active scanning and local review output for explicitly authorized targets |
+
+For live work, first verify the program's current scope, allowed techniques and rate limits. External tools and credentials are optional for the offline path above. Setup scripts download additional tools. Review those scripts and upstream rights before running them. Keep authenticated sessions, real target evidence and logs outside Git and shared build artifacts.
+
+See [maintenance and validation](docs/MAINTENANCE.md) for CI, credential handling and release status. The [MIT license](LICENSE) covers the maintainer's original work. [Third-party notices and exceptions](THIRD_PARTY.md) describe the limits of that grant.
